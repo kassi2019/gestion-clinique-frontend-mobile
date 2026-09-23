@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useState } from 'react'
 import {
   ActivityIndicator,
+  Alert,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -60,6 +61,13 @@ export default function LoginScreen() {
     } finally {
       setChargement(false)
     }
+  }
+
+  function motDePasseOublie() {
+    Alert.alert(
+      'Mot de passe oublié',
+      "Contactez un administrateur : il réinitialise votre mot de passe depuis Paramétrage → Utilisateurs → « Réinitialiser le mot de passe » (version web).",
+    )
   }
 
   return (
@@ -138,6 +146,10 @@ export default function LoginScreen() {
               )}
             </Pressable>
           </LinearGradient>
+
+          <Pressable onPress={motDePasseOublie}>
+            <Text style={styles.lienOublie}>Mot de passe oublié ?</Text>
+          </Pressable>
         </View>
 
         <Text style={styles.pied}>
@@ -276,6 +288,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   boutonTexte: { color: '#112712', fontSize: 16, fontWeight: '800' },
+  lienOublie: {
+    textAlign: 'center',
+    color: '#b5dc5f',
+    fontSize: 13,
+    fontWeight: '700',
+    marginTop: 14,
+    textDecorationLine: 'underline',
+  },
   pied: {
     textAlign: 'center',
     color: 'rgba(255,255,255,0.85)',

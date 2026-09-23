@@ -12,33 +12,8 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Input, Screen, SectionTitle } from '../components/ui'
+import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Screen, SectionTitle } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
-
-/** Groupe de choix façon « chips » (équivalent des cases à cocher du web). */
-function Chips({
-  options,
-  value,
-  onChange,
-}: {
-  options: string[]
-  value: string | null
-  onChange: (v: string) => void
-}) {
-  return (
-    <View style={styles.chips}>
-      {options.map((o) => (
-        <TouchableOpacity
-          key={o}
-          style={[styles.chip, value === o && styles.chipActif]}
-          onPress={() => onChange(o)}
-        >
-          <Text style={[styles.chipTexte, value === o && styles.chipTexteActif]}>{o}</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  )
-}
 
 type PassageRef = {
   id: number
@@ -49,15 +24,33 @@ type PassageRef = {
   service?: { nom: string }
 }
 
+function aujourdhui(): string {
+  const d = new Date()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const j = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${j}`
+}
+
 export default function ConsultationScreen({ navigation }: { navigation: { goBack: () => void } }) {
   const { user } = useAuth()
   const cliniqueId = user?.clinique?.id ?? 1
+  const estMedecin = user?.role?.code === 'MEDECIN'
+
+  // ── Flux médecin : affectation + disponibilité + heartbeat ──
+  const [vueMedecin, setVueMedecin] = useState<'file' | 'terminees' | 'recherche'>('file')
+  const [fileMedecin, setFileMedecin] = useState<{ enAttente: any[]; terminees: any[] }>({
+    enAttente: [],
+    terminees: [],
+  })
+  const [disponibilite, setDisponibilite] = useState<'DISPONIBLE' | 'INDISPONIBLE' | null>(null)
+  const [affectationOuverteId, setAffectationOuverteId] = useState<number | null>(null)
+  const [chargementFile, setChargementFile] = useState(false)
 
   const [recherche, setRecherche] = useState('')
   const [resultats, setResultats] = useState<PassageRef[]>([])
   const [passage, setPassage] = useState<PassageRef | null>(null)
   const [detail, setDetail] = useState<any>(null)
-  const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'examens' | 'historique'>('fiche')
+  const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'examens'>('fiche')
 
   // Fiche
   const [fiche, setFiche] = useState<any>({})
@@ -77,7 +70,6 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
   // Lits libres (hospitalisation)
   const [lits, setLits] = useState<any[]>([])
-  const [filtreHisto, setFiltreHisto] = useState<'aujourdhui' | 'tout'>('aujourdhui')
 
   // Impression ordonnance
   const [ordoApercu, setOrdoApercu] = useState<string | null>(null)
@@ -123,10 +115,92 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   }, [])
 
   async function choisirPassage(p: PassageRef) {
+    if (p.consultable === false) {
+      Alert.alert(
+        'Passage non activé',
+        "Le patient doit d'abord payer sa consultation à la caisse avant de consulter.",
+      )
+      return
+    }
     setPassage(p)
     setResultats([])
     setOnglet('fiche')
     await chargerDetail(p.id)
+  }
+
+  // ── Flux médecin : file d'attente / disponibilité ──
+  async function chargerFileMedecin() {
+    if (!estMedecin) return
+    setChargementFile(true)
+    try {
+      const { data } = await http.get('/consultations/moi', { params: { jour: aujourdhui() } })
+      setDisponibilite(data.disponibilite ?? null)
+      setFileMedecin({ enAttente: data.enAttente ?? [], terminees: data.terminees ?? [] })
+    } catch {
+      /* file vide */
+    } finally {
+      setChargementFile(false)
+    }
+  }
+
+  // Heartbeat : un médecin DISPONIBLE qui ne ping plus (> 2 min) est
+  // considéré « poste éteint » par le backend et ne reçoit plus de patients.
+  useEffect(() => {
+    if (!estMedecin) return
+    const ping = () => http.post('/consultations/ping').catch(() => {})
+    ping()
+    const timer = setInterval(ping, 60000)
+    return () => clearInterval(timer)
+  }, [estMedecin])
+
+  useEffect(() => {
+    if (estMedecin && !passage) chargerFileMedecin()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [estMedecin, passage])
+
+  async function basculerDisponibilite() {
+    const cible = disponibilite === 'DISPONIBLE' ? 'INDISPONIBLE' : 'DISPONIBLE'
+    try {
+      await http.put('/consultations/disponibilite', { disponibilite: cible })
+      setDisponibilite(cible)
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Opération impossible.')
+    }
+  }
+
+  async function ouvrirAffectation(a: any, avecOuverture: boolean) {
+    setAffectationOuverteId(a.id)
+    if (avecOuverture) {
+      try {
+        await http.post(`/consultations/affectations/${a.id}/ouvrir`)
+      } catch {
+        /* tolérant : le dossier s'ouvre quand même */
+      }
+    }
+    const p: PassageRef = a.passage
+    setPassage(p)
+    setOnglet('fiche')
+    await chargerDetail(p.id)
+  }
+
+  /** Quitter le dossier sans valider : EN_CONSULTATION → EN_ATTENTE. */
+  async function fermerAffectation() {
+    if (affectationOuverteId == null) return
+    const id = affectationOuverteId
+    setAffectationOuverteId(null)
+    try {
+      await http.post(`/consultations/affectations/${id}/fermer`)
+    } catch {
+      /* fire-and-forget */
+    }
+    chargerFileMedecin()
+  }
+
+  function fermerPassage() {
+    setPassage(null)
+    setDetail(null)
+    setOrdoApercu(null)
+    if (estMedecin) fermerAffectation()
   }
 
   async function chargerDetail(passageId: number) {
@@ -134,20 +208,53 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       const { data } = await http.get(`/consultations/passages/${passageId}`)
       setDetail(data)
       const c = data.passage.consultation
+      const pc = data.passage.patient ?? {}
       if (c) {
         setFiche({
           motif: c.motif ?? '',
           observation: c.observation ?? '',
           diagnostic: c.diagnostic ?? '',
           modeEntree: c.modeEntree ?? '',
+          modeEntreeAutre: c.modeEntreeAutre ?? '',
           hta: c.hta, diabete: c.diabete, tabac: c.tabac, alcool: c.alcool,
           grossesseEnCours: c.grossesseEnCours,
+          ddr: c.ddr ?? '',
           traitementAnterieur: c.traitementAnterieur ?? '',
           antecedentsMedicaux: c.antecedentsMedicaux ?? '',
           antecedentsChirurgicaux: c.antecedentsChirurgicaux ?? '',
-          profession: c.profession ?? '',
-          nationalite: c.nationalite ?? '',
-          telephone: c.telephone ?? '',
+          pathologiesAssociees: c.pathologiesAssociees ?? '',
+          typeSuivi: c.typeSuivi ?? '',
+          consultantType: c.consultantType ?? '',
+          imc: c.imc ?? '',
+          zscore: c.zscore ?? '',
+          frequenceRespiratoire: c.frequenceRespiratoire ?? '',
+          perimetreBrachial: c.perimetreBrachial ?? '',
+          perimetreCranien: c.perimetreCranien ?? '',
+          rechercheTB: c.rechercheTB,
+          tdrPaludisme: c.tdrPaludisme,
+          goutteEpaisse: c.goutteEpaisse,
+          mildaEligible: c.mildaEligible,
+          mildaRemise: c.mildaRemise,
+          cdipPropose: c.cdipPropose,
+          cdipRealise: c.cdipRealise,
+          codeDepistage: c.codeDepistage ?? '',
+          glycemieAjeun: c.glycemieAjeun ?? '',
+          glycemieNonAjeun: c.glycemieNonAjeun ?? '',
+          autresExamens: c.autresExamens ?? '',
+          casPresumeTB: c.casPresumeTB,
+          moDureeHeures: c.moDureeHeures ?? '',
+          moDureeMinutes: c.moDureeMinutes ?? '',
+          moDebut: c.moDebut ?? '',
+          moFin: c.moFin ?? '',
+          profession: pc.profession ?? '',
+          nationalite: pc.nationalite ?? '',
+          scolarisation: pc.scolarisation ?? '',
+          statutConjugal: pc.statutConjugal ?? '',
+          typePopulation: pc.typePopulation ?? '',
+          populationsRisque: pc.populationsRisque ?? '',
+          protectionSociale: pc.protectionSociale ?? '',
+          residenceHabituelle: pc.residenceHabituelle ?? '',
+          residenceActuelle: pc.residenceActuelle ?? '',
           hospitalisation: c.hospitalisation ?? false,
           hospitalisationDuree: c.hospitalisationDuree ?? '',
           issueSortie: c.issueSortie ?? '',
@@ -173,14 +280,40 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         observation: vider(fiche.observation),
         diagnostic: vider(fiche.diagnostic),
         modeEntree: vider(fiche.modeEntree),
+        modeEntreeAutre: vider(fiche.modeEntreeAutre),
         hta: fiche.hta,
         diabete: fiche.diabete,
         tabac: fiche.tabac,
         alcool: fiche.alcool,
         grossesseEnCours: fiche.grossesseEnCours,
+        ddr: vider(fiche.ddr),
         traitementAnterieur: vider(fiche.traitementAnterieur),
         antecedentsMedicaux: vider(fiche.antecedentsMedicaux),
         antecedentsChirurgicaux: vider(fiche.antecedentsChirurgicaux),
+        pathologiesAssociees: vider(fiche.pathologiesAssociees),
+        typeSuivi: vider(fiche.typeSuivi),
+        consultantType: vider(fiche.consultantType),
+        imc: vider(fiche.imc),
+        zscore: vider(fiche.zscore),
+        frequenceRespiratoire: vider(fiche.frequenceRespiratoire),
+        perimetreBrachial: vider(fiche.perimetreBrachial),
+        perimetreCranien: vider(fiche.perimetreCranien),
+        rechercheTB: fiche.rechercheTB,
+        tdrPaludisme: fiche.tdrPaludisme,
+        goutteEpaisse: fiche.goutteEpaisse,
+        mildaEligible: fiche.mildaEligible,
+        mildaRemise: fiche.mildaRemise,
+        cdipPropose: fiche.cdipPropose,
+        cdipRealise: fiche.cdipRealise,
+        codeDepistage: vider(fiche.codeDepistage),
+        glycemieAjeun: vider(fiche.glycemieAjeun),
+        glycemieNonAjeun: vider(fiche.glycemieNonAjeun),
+        autresExamens: vider(fiche.autresExamens),
+        casPresumeTB: fiche.casPresumeTB,
+        moDureeHeures: vider(fiche.moDureeHeures),
+        moDureeMinutes: vider(fiche.moDureeMinutes),
+        moDebut: vider(fiche.moDebut),
+        moFin: vider(fiche.moFin),
         hospitalisation: fiche.hospitalisation,
         hospitalisationDuree: vider(fiche.hospitalisationDuree),
         typeHospitalisation: vider(fiche.typeHospitalisation),
@@ -191,6 +324,13 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         patient: {
           profession: vider(fiche.profession),
           nationalite: vider(fiche.nationalite),
+          scolarisation: vider(fiche.scolarisation),
+          statutConjugal: vider(fiche.statutConjugal),
+          typePopulation: vider(fiche.typePopulation),
+          populationsRisque: vider(fiche.populationsRisque),
+          protectionSociale: vider(fiche.protectionSociale),
+          residenceHabituelle: vider(fiche.residenceHabituelle),
+          residenceActuelle: vider(fiche.residenceActuelle),
         },
       }
       await http.post(`/consultations/passages/${passage.id}`, payload)
@@ -210,11 +350,13 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       { text: 'Annuler', style: 'cancel' },
       {
         text: 'Valider',
-        onPress: async () => {
+          onPress: async () => {
           try {
             await http.post(`/consultations/${consultation.id}/valider`)
             Alert.alert('✅ Consultation validée')
+            setAffectationOuverteId(null) // le backend clôt l'affectation (TERMINE)
             await chargerDetail(passage!.id)
+            chargerFileMedecin()
           } catch (e: any) {
             Alert.alert('Erreur', e.response?.data?.message ?? 'Validation impossible.')
           }
@@ -364,6 +506,20 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           <Text style={styles.btnRetourTexte}>← Modules</Text>
         </TouchableOpacity>
         <Text style={styles.titre}>🩺 Consultation</Text>
+        {estMedecin && !passage ? (
+          <View style={styles.ligneDispo}>
+            <Badge
+              label={disponibilite === 'DISPONIBLE' ? 'Disponible' : 'Indisponible'}
+              tone={disponibilite === 'DISPONIBLE' ? 'success' : 'muted'}
+            />
+            <Btn
+              title={disponibilite === 'DISPONIBLE' ? 'Devenir indisponible' : 'Devenir disponible'}
+              small
+              variant="outline"
+              onPress={basculerDisponibilite}
+            />
+          </View>
+        ) : null}
         {!passage ? (
           <TextInput
             style={styles.recherche}
@@ -377,17 +533,108 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
       {!passage ? (
         <View style={{ padding: 16 }}>
-          {resultats.map((r) => (
-            <TouchableOpacity key={r.id} style={styles.item} onPress={() => choisirPassage(r)}>
-              <Text style={styles.itemTitre}>
-                {r.patient.nom} {r.patient.prenom}
-              </Text>
-              <Text style={styles.itemSous}>
-                {r.numeroOrdre} · {r.patient.code} · {r.service?.nom ?? ''} ·{' '}
-                {r.consultable ? 'Consultable' : 'Non activé (paiement requis)'}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {estMedecin ? (
+            <>
+              <View style={styles.onglets}>
+                {(
+                  [
+                    { key: 'file', label: `File d'attente (${fileMedecin.enAttente.length})` },
+                    { key: 'terminees', label: `Terminées (${fileMedecin.terminees.length})` },
+                    { key: 'recherche', label: 'Recherche' },
+                  ] as const
+                ).map((o) => (
+                  <TouchableOpacity
+                    key={o.key}
+                    style={[styles.onglet, vueMedecin === o.key && styles.ongletActif]}
+                    onPress={() => setVueMedecin(o.key)}
+                  >
+                    <Text style={[styles.ongletTexte, vueMedecin === o.key && styles.ongletTexteActif]}>
+                      {o.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {vueMedecin === 'file' ? (
+                <>
+                  {chargementFile ? <Text style={styles.vide}>Chargement…</Text> : null}
+                  {!chargementFile && fileMedecin.enAttente.length === 0 ? (
+                    <Text style={styles.vide}>
+                      {disponibilite === 'DISPONIBLE'
+                        ? 'Aucun patient en attente pour le moment.'
+                        : 'Vous êtes indisponible : devenez disponible pour recevoir des patients.'}
+                    </Text>
+                  ) : null}
+                  {fileMedecin.enAttente.map((a) => (
+                    <TouchableOpacity
+                      key={a.id}
+                      style={styles.item}
+                      onPress={() => ouvrirAffectation(a, true)}
+                    >
+                      <Text style={styles.itemTitre}>
+                        {a.passage?.patient?.nom ?? ''} {a.passage?.patient?.prenom ?? ''}
+                      </Text>
+                      <Text style={styles.itemSous}>
+                        {a.passage?.numeroOrdre ?? ''} · {a.passage?.service?.nom ?? ''}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
+              ) : null}
+
+              {vueMedecin === 'terminees' ? (
+                <>
+                  {fileMedecin.terminees.length === 0 ? (
+                    <Text style={styles.vide}>Aucune consultation terminée aujourd'hui.</Text>
+                  ) : null}
+                  {fileMedecin.terminees.map((a) => (
+                    <TouchableOpacity
+                      key={a.id}
+                      style={styles.item}
+                      onPress={() => ouvrirAffectation(a, false)}
+                    >
+                      <Text style={styles.itemTitre}>
+                        {a.passage?.patient?.nom ?? ''} {a.passage?.patient?.prenom ?? ''}
+                      </Text>
+                      <Text style={styles.itemSous}>
+                        {a.passage?.numeroOrdre ?? ''} · {a.passage?.service?.nom ?? ''}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
+              ) : null}
+
+              {vueMedecin === 'recherche' ? (
+                <>
+                  {resultats.map((r) => (
+                    <TouchableOpacity key={r.id} style={styles.item} onPress={() => choisirPassage(r)}>
+                      <Text style={styles.itemTitre}>
+                        {r.patient.nom} {r.patient.prenom}
+                      </Text>
+                      <Text style={styles.itemSous}>
+                        {r.numeroOrdre} · {r.patient.code} · {r.service?.nom ?? ''} ·{' '}
+                        {r.consultable ? 'Consultable' : 'Non activé (paiement requis)'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </>
+              ) : null}
+            </>
+          ) : (
+            <>
+              {resultats.map((r) => (
+                <TouchableOpacity key={r.id} style={styles.item} onPress={() => choisirPassage(r)}>
+                  <Text style={styles.itemTitre}>
+                    {r.patient.nom} {r.patient.prenom}
+                  </Text>
+                  <Text style={styles.itemSous}>
+                    {r.numeroOrdre} · {r.patient.code} · {r.service?.nom ?? ''} ·{' '}
+                    {r.consultable ? 'Consultable' : 'Non activé (paiement requis)'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </>
+          )}
         </View>
       ) : (
         <>
@@ -404,15 +651,15 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                 <Badge label={consultation.statut === 'VALIDEE' ? 'Validée' : 'En cours'} tone={consultation.statut === 'VALIDEE' ? 'success' : 'warning'} />
               ) : null}
             </View>
-            <Btn title="✕" small variant="outline" onPress={() => { setPassage(null); setDetail(null); setOrdoApercu(null) }} />
+            <Btn title="✕" small variant="outline" onPress={fermerPassage} />
           </View>
 
           {/* Onglets */}
           <View style={styles.onglets}>
-            {(['fiche', 'medicaments', 'examens', 'historique'] as const).map((o) => (
+            {(['fiche', 'medicaments', 'examens'] as const).map((o) => (
               <TouchableOpacity key={o} style={[styles.onglet, onglet === o && styles.ongletActif]} onPress={() => setOnglet(o)}>
                 <Text style={[styles.ongletTexte, onglet === o && styles.ongletTexteActif]}>
-                  {o === 'fiche' ? 'Fiche' : o === 'medicaments' ? 'Médicaments' : o === 'examens' ? 'Examens' : 'Historique'}
+                  {o === 'fiche' ? 'Fiche' : o === 'medicaments' ? 'Médicaments' : 'Examens'}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -439,9 +686,84 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   <Chips options={['Oui', 'Non']} value={fiche.hta == null ? null : fiche.hta ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, hta: v === 'Oui' })} />
                   <Text style={styles.label}>Diabète</Text>
                   <Chips options={['Oui', 'Non']} value={fiche.diabete == null ? null : fiche.diabete ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, diabete: v === 'Oui' })} />
+                  <Text style={styles.label}>Tabac</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.tabac == null ? null : fiche.tabac ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, tabac: v === 'Oui' })} />
+                  <Text style={styles.label}>Alcool</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.alcool == null ? null : fiche.alcool ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, alcool: v === 'Oui' })} />
+                  <Text style={styles.label}>Grossesse en cours</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.grossesseEnCours == null ? null : fiche.grossesseEnCours ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, grossesseEnCours: v === 'Oui' })} />
+                  <Input label="DDR (date des dernières règles)" value={fiche.ddr ?? ''} onChangeText={(t) => setFiche({ ...fiche, ddr: t })} placeholder="AAAA-MM-JJ" />
                   <Input label="Traitement antérieur" value={fiche.traitementAnterieur ?? ''} onChangeText={(t) => setFiche({ ...fiche, traitementAnterieur: t })} />
                   <Input label="Antécédents médicaux" value={fiche.antecedentsMedicaux ?? ''} onChangeText={(t) => setFiche({ ...fiche, antecedentsMedicaux: t })} />
                   <Input label="Antécédents chirurgicaux" value={fiche.antecedentsChirurgicaux ?? ''} onChangeText={(t) => setFiche({ ...fiche, antecedentsChirurgicaux: t })} />
+                  <Input label="Pathologies associées" value={fiche.pathologiesAssociees ?? ''} onChangeText={(t) => setFiche({ ...fiche, pathologiesAssociees: t })} />
+                </Card>
+                <Card>
+                  <SectionTitle>Constantes & examen physique</SectionTitle>
+                  <InfoLigne label="Poids / Taille" value={`${detail?.passage?.poids ?? '—'} kg · ${detail?.passage?.taille ?? '—'} cm`} />
+                  <InfoLigne label="Température / Pouls" value={`${detail?.passage?.temperature ?? '—'} °C · ${detail?.passage?.pouls ?? '—'} bpm`} />
+                  <InfoLigne
+                    label="TA gauche / droite"
+                    value={`${detail?.passage?.tensionGauche ?? '—'} · ${detail?.passage?.tensionDroite ?? '—'}`}
+                  />
+                  <Input label="IMC" value={fiche.imc ?? ''} onChangeText={(t) => setFiche({ ...fiche, imc: t })} keyboardType="numeric" />
+                  <Input label="Z-score" value={fiche.zscore ?? ''} onChangeText={(t) => setFiche({ ...fiche, zscore: t })} />
+                  <Input label="Fréquence respiratoire" value={fiche.frequenceRespiratoire ?? ''} onChangeText={(t) => setFiche({ ...fiche, frequenceRespiratoire: t })} keyboardType="numeric" />
+                  <View style={styles.ligne}>
+                    <View style={styles.ligneItem}>
+                      <Input label="Périmètre brachial (cm)" value={fiche.perimetreBrachial ?? ''} onChangeText={(t) => setFiche({ ...fiche, perimetreBrachial: t })} keyboardType="numeric" />
+                    </View>
+                    <View style={styles.ligneItem}>
+                      <Input label="Périmètre crânien (cm)" value={fiche.perimetreCranien ?? ''} onChangeText={(t) => setFiche({ ...fiche, perimetreCranien: t })} keyboardType="numeric" />
+                    </View>
+                  </View>
+                </Card>
+                <Card>
+                  <SectionTitle>Dépistages</SectionTitle>
+                  <Text style={styles.label}>Recherche de TB</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.rechercheTB == null ? null : fiche.rechercheTB ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, rechercheTB: v === 'Oui' })} />
+                  <Text style={styles.label}>Cas présumé TB</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.casPresumeTB == null ? null : fiche.casPresumeTB ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, casPresumeTB: v === 'Oui' })} />
+                  <Text style={styles.label}>TDR paludisme</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.tdrPaludisme == null ? null : fiche.tdrPaludisme ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, tdrPaludisme: v === 'Oui' })} />
+                  <Text style={styles.label}>Goutte épaisse</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.goutteEpaisse == null ? null : fiche.goutteEpaisse ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, goutteEpaisse: v === 'Oui' })} />
+                  <Text style={styles.label}>MILDA éligible</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.mildaEligible == null ? null : fiche.mildaEligible ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, mildaEligible: v === 'Oui' })} />
+                  <Text style={styles.label}>MILDA remise</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.mildaRemise == null ? null : fiche.mildaRemise ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, mildaRemise: v === 'Oui' })} />
+                  <Text style={styles.label}>CDIP proposé</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.cdipPropose == null ? null : fiche.cdipPropose ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, cdipPropose: v === 'Oui' })} />
+                  <Text style={styles.label}>CDIP réalisé</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.cdipRealise == null ? null : fiche.cdipRealise ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, cdipRealise: v === 'Oui' })} />
+                  <Input label="Code dépistage" value={fiche.codeDepistage ?? ''} onChangeText={(t) => setFiche({ ...fiche, codeDepistage: t })} />
+                  <View style={styles.ligne}>
+                    <View style={styles.ligneItem}>
+                      <Input label="Glycémie à jeun" value={fiche.glycemieAjeun ?? ''} onChangeText={(t) => setFiche({ ...fiche, glycemieAjeun: t })} keyboardType="numeric" />
+                    </View>
+                    <View style={styles.ligneItem}>
+                      <Input label="Glycémie non à jeun" value={fiche.glycemieNonAjeun ?? ''} onChangeText={(t) => setFiche({ ...fiche, glycemieNonAjeun: t })} keyboardType="numeric" />
+                    </View>
+                  </View>
+                  <Input label="Autres examens" value={fiche.autresExamens ?? ''} onChangeText={(t) => setFiche({ ...fiche, autresExamens: t })} />
+                </Card>
+                <Card>
+                  <SectionTitle>Données administratives</SectionTitle>
+                  <View style={styles.ligne}>
+                    <View style={styles.ligneItem}>
+                      <Input label="Profession" value={fiche.profession ?? ''} onChangeText={(t) => setFiche({ ...fiche, profession: t })} />
+                    </View>
+                    <View style={styles.ligneItem}>
+                      <Input label="Nationalité" value={fiche.nationalite ?? ''} onChangeText={(t) => setFiche({ ...fiche, nationalite: t })} />
+                    </View>
+                  </View>
+                  <Input label="Scolarisation" value={fiche.scolarisation ?? ''} onChangeText={(t) => setFiche({ ...fiche, scolarisation: t })} />
+                  <Input label="Statut conjugal" value={fiche.statutConjugal ?? ''} onChangeText={(t) => setFiche({ ...fiche, statutConjugal: t })} />
+                  <Input label="Type de population" value={fiche.typePopulation ?? ''} onChangeText={(t) => setFiche({ ...fiche, typePopulation: t })} />
+                  <Input label="Protection sociale" value={fiche.protectionSociale ?? ''} onChangeText={(t) => setFiche({ ...fiche, protectionSociale: t })} />
+                  <Input label="Populations à risque" value={fiche.populationsRisque ?? ''} onChangeText={(t) => setFiche({ ...fiche, populationsRisque: t })} />
+                  <Input label="Résidence habituelle" value={fiche.residenceHabituelle ?? ''} onChangeText={(t) => setFiche({ ...fiche, residenceHabituelle: t })} />
+                  <Input label="Résidence actuelle" value={fiche.residenceActuelle ?? ''} onChangeText={(t) => setFiche({ ...fiche, residenceActuelle: t })} />
                 </Card>
                 <Card>
                   <SectionTitle>Hospitalisation</SectionTitle>
@@ -501,6 +823,73 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   ) : null}
                   <Input label="Conduite à tenir / traitement" value={fiche.conduiteTenir ?? ''} onChangeText={(t) => setFiche({ ...fiche, conduiteTenir: t })} multiline />
                 </Card>
+                <Card>
+                  <SectionTitle>Issue de la consultation</SectionTitle>
+                  <Chips
+                    options={['Hospitalisé(e)', 'M.O.', 'Référé(e) en interne', 'Référé(e) externe']}
+                    value={
+                      fiche.issueSortie === 'HOSPITALISE'
+                        ? 'Hospitalisé(e)'
+                        : fiche.issueSortie === 'MO'
+                          ? 'M.O.'
+                          : fiche.issueSortie === 'REFERE_INTERNE'
+                            ? 'Référé(e) en interne'
+                            : fiche.issueSortie === 'REFERE_EXTERNE'
+                              ? 'Référé(e) externe'
+                              : null
+                    }
+                    onChange={(v) =>
+                      setFiche({
+                        ...fiche,
+                        issueSortie:
+                          v === 'Hospitalisé(e)'
+                            ? 'HOSPITALISE'
+                            : v === 'M.O.'
+                              ? 'MO'
+                              : v === 'Référé(e) en interne'
+                                ? 'REFERE_INTERNE'
+                                : 'REFERE_EXTERNE',
+                      })
+                    }
+                  />
+                  {fiche.issueSortie === 'MO' ? (
+                    <>
+                      <View style={styles.ligne}>
+                        <View style={styles.ligneItem}>
+                          <Input
+                            label="Durée M.O. (heures)"
+                            value={fiche.moDureeHeures ?? ''}
+                            onChangeText={(t) => setFiche({ ...fiche, moDureeHeures: t })}
+                            keyboardType="numeric"
+                          />
+                        </View>
+                        <View style={styles.ligneItem}>
+                          <Input
+                            label="Durée M.O. (minutes)"
+                            value={fiche.moDureeMinutes ?? ''}
+                            onChangeText={(t) => setFiche({ ...fiche, moDureeMinutes: t })}
+                            keyboardType="numeric"
+                          />
+                        </View>
+                      </View>
+                      <Input label="Début M.O." value={fiche.moDebut ?? ''} onChangeText={(t) => setFiche({ ...fiche, moDebut: t })} placeholder="AAAA-MM-JJ HH:MM" />
+                      <Input label="Fin M.O." value={fiche.moFin ?? ''} onChangeText={(t) => setFiche({ ...fiche, moFin: t })} placeholder="AAAA-MM-JJ HH:MM" />
+                    </>
+                  ) : null}
+                </Card>
+                {historique.length > 0 ? (
+                  <Card>
+                    <SectionTitle>Historique médical</SectionTitle>
+                    {historique.map((h: any, i: number) => (
+                      <View key={i} style={styles.item}>
+                        <Text style={styles.itemTitre}>
+                          {new Date(h.createdAt ?? h.date).toLocaleDateString('fr-FR')} · {h.diagnostic ?? 'Consultation'}
+                        </Text>
+                        <Text style={styles.itemSous}>{h.motif ?? ''}</Text>
+                      </View>
+                    ))}
+                  </Card>
+                ) : null}
                 <Btn title="💾 Enregistrer la fiche" onPress={enregistrerFiche} loading={saving} />
                 {consultation && consultation.statut !== 'VALIDEE' ? (
                   <View style={{ marginTop: 10 }}>
@@ -546,7 +935,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                 </Card>
                 {ordoApercu ? <ApercuTexte contenu={ordoApercu} /> : null}
               </>
-            ) : onglet === 'examens' ? (
+            ) : (
               <Card>
                 <SectionTitle>Examens (laboratoire / imagerie)</SectionTitle>
                 {consultation ? (
@@ -581,42 +970,6 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     ) : null}
                   </View>
                 ))}
-              </Card>
-            ) : (
-              <Card>
-                <SectionTitle>Historique médical</SectionTitle>
-                <View style={styles.chips}>
-                  <TouchableOpacity
-                    style={[styles.chip, filtreHisto === 'aujourdhui' && styles.chipActif]}
-                    onPress={() => setFiltreHisto('aujourdhui')}
-                  >
-                    <Text style={[styles.chipTexte, filtreHisto === 'aujourdhui' && styles.chipTexteActif]}>Aujourd'hui</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.chip, filtreHisto === 'tout' && styles.chipActif]}
-                    onPress={() => setFiltreHisto('tout')}
-                  >
-                    <Text style={[styles.chipTexte, filtreHisto === 'tout' && styles.chipTexteActif]}>Tout</Text>
-                  </TouchableOpacity>
-                </View>
-                {historique
-                  .filter((h: any) =>
-                    filtreHisto === 'aujourdhui'
-                      ? new Date(h.createdAt).toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10)
-                      : true,
-                  )
-                  .map((h: any) => (
-                    <View key={h.id} style={styles.ligneMed}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.medNom}>{h.passage?.numeroOrdre} · {new Date(h.createdAt).toLocaleDateString('fr-FR')}</Text>
-                        {h.diagnostic ? <Text style={styles.medDetail}>Diagnostic : {h.diagnostic}</Text> : null}
-                        {h.medicaments?.length ? (
-                          <Text style={styles.medDetail}>💊 {h.medicaments.map((m: any) => m.medicamentNom).join(', ')}</Text>
-                        ) : null}
-                      </View>
-                      <Badge label={h.statut === 'VALIDEE' ? 'Validée' : 'En cours'} tone={h.statut === 'VALIDEE' ? 'success' : 'warning'} />
-                    </View>
-                  ))}
               </Card>
             )}
           </ScrollView>
@@ -723,6 +1076,8 @@ const styles = StyleSheet.create({
   note: { fontSize: 12, color: colors.textMuted, marginTop: 8, marginBottom: 6 },
   ligne: { flexDirection: 'row', gap: 10 },
   ligneItem: { flex: 1 },
+  ligneDispo: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
+  vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 16 },
   ligneMed: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -733,7 +1088,6 @@ const styles = StyleSheet.create({
   },
   medNom: { fontSize: 14, fontWeight: '700', color: colors.text },
   medDetail: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 16 },
   modalVoile: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.55)',

@@ -32,10 +32,18 @@ export default function ListeSelect({
   const [ouvert, setOuvert] = useState(false)
   const [recherche, setRecherche] = useState('')
 
+  // Normalisation : recherche réellement insensible aux accents
+  // (« ebe » trouve « ébé ») et à la casse.
+  const norm = (s: string) =>
+    s
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+
   const filtrees = useMemo(() => {
-    const q = recherche.trim().toLowerCase()
+    const q = norm(recherche.trim())
     if (!q) return options
-    return options.filter((o) => o.label.toLowerCase().includes(q))
+    return options.filter((o) => norm(o.label).includes(q))
   }, [options, recherche])
 
   const choisie = options.find((o) => o.value === value)

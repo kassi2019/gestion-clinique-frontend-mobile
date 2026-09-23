@@ -11,7 +11,7 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { Badge, Btn, Card, Input, Screen, SectionTitle } from '../components/ui'
+import { Badge, Btn, Card, Input, PaginationBar, Screen, SectionTitle } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 
 type Lit = {
@@ -40,7 +40,74 @@ export default function HospitalisationScreen({ navigation }: { navigation: { go
   const { user } = useAuth()
   const cliniqueId = user?.clinique?.id ?? 1
 
-  const [onglet, setOnglet] = useState<'admissions' | 'occupation'>('admissions')
+  const [onglet, setOnglet] = useState<'admissions' | 'occupation' | 'historique'>('admissions')
+
+  // ── Historique des séjours ──
+  const [histoJour, setHistoJour] = useState('')
+  const [histoRecherche, setHistoRecherche] = useState('')
+  const [histoStatut, setHistoStatut] = useState<'Tous' | 'EN_COURS' | 'SORTI'>('Tous')
+  const [histoListe, setHistoListe] = useState<any[]>([])
+  const [histoPage, setHistoPage] = useState(1)
+  const [histoTotalPages, setHistoTotalPages] = useState(1)
+  const [histoChargement, setHistoChargement] = useState(false)
+
+  // ── Suivi de séjour (observations) ──
+  const [suiviCible, setSuiviCible] = useState<any>(null)
+  const [suiviObservations, setSuiviObservations] = useState('')
+  const [suiviEnCours, setSuiviEnCours] = useState(false)
+
+  async function chargerHistorique(p = 1) {
+    setHistoChargement(true)
+    try {
+      const { data } = await http.get('/hospitalisation/sejours', {
+        params: {
+          cliniqueId,
+          jour: histoJour || undefined,
+          recherche: histoRecherche.trim() || undefined,
+          statut: histoStatut !== 'Tous' ? histoStatut : undefined,
+          page: p,
+          perPage: 20,
+        },
+      })
+      setHistoListe(data.data ?? [])
+      setHistoPage(p)
+      setHistoTotalPages(data.totalPages ?? 1)
+    } catch {
+      setHistoListe([])
+    } finally {
+      setHistoChargement(false)
+    }
+  }
+
+  useEffect(() => {
+    if (onglet === 'historique') {
+      const t = setTimeout(() => chargerHistorique(1), 300)
+      return () => clearTimeout(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onglet, histoJour, histoRecherche, histoStatut])
+
+  function ouvrirSuivi(s: any) {
+    setSuiviCible(s)
+    setSuiviObservations(s.observations ?? '')
+  }
+
+  async function enregistrerSuivi() {
+    if (!suiviCible) return
+    setSuiviEnCours(true)
+    try {
+      await http.patch(`/hospitalisation/sejours/${suiviCible.id}`, {
+        observations: suiviObservations || undefined,
+      })
+      Alert.alert('✅ Suivi enregistré')
+      setSuiviCible(null)
+      chargerLits()
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Enregistrement impossible.')
+    } finally {
+      setSuiviEnCours(false)
+    }
+  }
   const [recherche, setRecherche] = useState('')
   const [resultats, setResultats] = useState<PassageRef[]>([])
   const [passage, setPassage] = useState<PassageRef | null>(null)
@@ -188,7 +255,7 @@ export default function HospitalisationScreen({ navigation }: { navigation: { go
       </View>
 
       <View style={styles.onglets}>
-        {(['admissions', 'occupation'] as const).map((o) => (
+        {(['admissions', 'occupation', 'historique'] as const).map((o) => (
           <TouchableOpacity
             key={o}
             style={[styles.onglet, onglet === o && styles.ongletActif]}
@@ -198,7 +265,7 @@ export default function HospitalisationScreen({ navigation }: { navigation: { go
             }}
           >
             <Text style={[styles.ongletTexte, onglet === o && styles.ongletTexteActif]}>
-              {o === 'admissions' ? 'Admissions' : 'Occupation'}
+              {o === 'admissions' ? 'Admissions' : o === 'occupation' ? 'Occupation' : 'Historique'}
             </Text>
           </TouchableOpacity>
         ))}
@@ -304,12 +371,81 @@ export default function HospitalisationScreen({ navigation }: { navigation: { go
                     </Text>
                   </View>
                 </View>
-                <Btn title="🚪 Sortie" variant="danger" onPress={() => ouvrirSortie(s)} />
+                <View style={styles.actionsLigne}>
+                  <Btn title="📝 Suivi" variant="outline" onPress={() => ouvrirSuivi(s)} />
+                  <Btn title="🚪 Sortie" variant="danger" onPress={() => ouvrirSortie(s)} />
+                </View>
               </Card>
             ))
           )}
         </ScrollView>
       )}
+
+      {onglet === 'historique' ? (
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          <View style={styles.ligne}>
+            <View style={styles.ligneItem}>
+              <Input label="Jour (AAAA-MM-JJ)" value={histoJour} onChangeText={setHistoJour} />
+            </View>
+            <View style={styles.ligneItem}>
+              <Input label="Rechercher" value={histoRecherche} onChangeText={setHistoRecherche} />
+            </View>
+          </View>
+          <Input label="Statut">
+            <ListeSelect
+              value={histoStatut}
+              options={[
+                { value: 'Tous', label: 'Tous' },
+                { value: 'EN_COURS', label: 'En cours' },
+                { value: 'SORTI', label: 'Sortis' },
+              ]}
+              onChange={(v) => setHistoStatut(v as typeof histoStatut)}
+            />
+          </Input>
+          {histoChargement ? <Text style={styles.vide}>Chargement…</Text> : null}
+          {!histoChargement && histoListe.length === 0 ? (
+            <Text style={styles.vide}>Aucun séjour.</Text>
+          ) : null}
+          {histoListe.map((s) => (
+            <Card key={s.id}>
+              <Text style={styles.ficheNom}>
+                {s.patient?.nom} {s.patient?.prenom}
+              </Text>
+              <Text style={styles.ficheSous}>
+                Lit {s.lit?.chambre?.numero}-{s.lit?.numero} · entrée{' '}
+                {s.dateEntree ? new Date(s.dateEntree).toLocaleDateString('fr-FR') : '—'}
+                {s.dateSortie ? ` · sortie ${new Date(s.dateSortie).toLocaleDateString('fr-FR')}` : ''}
+              </Text>
+              <Badge
+                label={s.statut === 'SORTI' ? 'Sorti' : 'En cours'}
+                tone={s.statut === 'SORTI' ? 'muted' : 'success'}
+              />
+            </Card>
+          ))}
+          <PaginationBar page={histoPage} totalPages={histoTotalPages} onPage={(p) => chargerHistorique(p)} />
+        </ScrollView>
+      ) : null}
+
+      {/* Modale suivi de séjour */}
+      {suiviCible ? (
+        <View style={styles.modalVoile}>
+          <View style={styles.modalCarte}>
+            <Text style={styles.modalTitre}>
+              📝 Suivi — {suiviCible.patient?.nom} {suiviCible.patient?.prenom}
+            </Text>
+            <Input
+              label="Observations du séjour"
+              value={suiviObservations}
+              onChangeText={setSuiviObservations}
+              multiline
+            />
+            <View style={styles.modalActions}>
+              <Btn title="Annuler" variant="outline" onPress={() => setSuiviCible(null)} />
+              <Btn title="💾 Enregistrer" onPress={enregistrerSuivi} loading={suiviEnCours} />
+            </View>
+          </View>
+        </View>
+      ) : null}
 
       {/* Modale sortie */}
       {sortieCible ? (
@@ -379,6 +515,9 @@ const styles = StyleSheet.create({
   ficheSous: { fontSize: 12.5, color: colors.textMuted, marginTop: 2 },
   medNom: { fontSize: 14, fontWeight: '700', color: colors.text },
   vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 16 },
+  ligne: { flexDirection: 'row', gap: 10 },
+  ligneItem: { flex: 1 },
+  actionsLigne: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
   resumeOccupation: {
     backgroundColor: colors.primaryLight,
     borderRadius: 12,

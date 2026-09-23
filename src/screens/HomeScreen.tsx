@@ -4,6 +4,9 @@ import { LinearGradient } from 'expo-linear-gradient'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
+import { Btn, Input, Modale } from '../components/ui'
+import http from '../api/http'
+import { useState } from 'react'
 
 type Nav = { navigate: (r: string) => void }
 
@@ -42,7 +45,12 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
       return
     }
     if (!mod.route) {
-      Alert.alert('Bientôt disponible', `Le module ${mod.label} arrive dans une prochaine version.`)
+      Alert.alert(
+        mod.code === 'PARAMETRAGE' ? 'Module web uniquement' : 'Bientôt disponible',
+        mod.code === 'PARAMETRAGE'
+          ? 'Le paramétrage (utilisateurs, prestations, assurances, imprimantes…) se fait depuis la version web : https://clinique.easymanagement.tech'
+          : `Le module ${mod.label} arrive dans une prochaine version.`,
+      )
       return
     }
     navigation.navigate(mod.route)
@@ -53,6 +61,37 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
       { text: 'Annuler', style: 'cancel' },
       { text: 'Oui', style: 'destructive', onPress: () => logout() },
     ])
+  }
+
+  // ── Changement de mot de passe ──
+  const [mdpVisible, setMdpVisible] = useState(false)
+  const [mdp, setMdp] = useState({ actuel: '', nouveau: '', confirmation: '' })
+  const [mdpEnCours, setMdpEnCours] = useState(false)
+
+  async function changerMotDePasse() {
+    if (mdp.nouveau.length < 6) {
+      Alert.alert('Mot de passe', 'Le nouveau mot de passe doit contenir au moins 6 caractères.')
+      return
+    }
+    if (mdp.nouveau !== mdp.confirmation) {
+      Alert.alert('Mot de passe', 'La confirmation ne correspond pas au nouveau mot de passe.')
+      return
+    }
+    setMdpEnCours(true)
+    try {
+      await http.post('/auth/changer-mot-de-passe', {
+        motDePasseActuel: mdp.actuel,
+        nouveauMotDePasse: mdp.nouveau,
+      })
+      Alert.alert('✅ Mot de passe modifié', 'Utilisez votre nouveau mot de passe à la prochaine connexion.')
+      setMdpVisible(false)
+      setMdp({ actuel: '', nouveau: '', confirmation: '' })
+    } catch (e: any) {
+      const msg = e.response?.data?.message
+      Alert.alert('Erreur', Array.isArray(msg) ? msg.join('\n') : msg ?? 'Changement impossible.')
+    } finally {
+      setMdpEnCours(false)
+    }
   }
 
   return (
@@ -74,6 +113,9 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
               {user?.role?.nom ?? ''} · {user?.clinique?.nom ?? ''}
             </Text>
           </View>
+          <TouchableOpacity style={styles.btnDeconnexion} onPress={() => setMdpVisible(true)}>
+            <Text style={styles.btnDeconnexionTexte}>🔑 Mot de passe</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={styles.btnDeconnexion} onPress={deconnexion}>
             <Text style={styles.btnDeconnexionTexte}>Déconnexion</Text>
           </TouchableOpacity>
@@ -104,6 +146,41 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
           })}
         </View>
       </ScrollView>
+
+      {/* Modale : changer son mot de passe */}
+      <Modale
+        visible={mdpVisible}
+        titre="🔑 Changer le mot de passe"
+        onFermer={() => setMdpVisible(false)}
+        actions={
+          <>
+            <Btn title="Annuler" small variant="outline" onPress={() => setMdpVisible(false)} />
+            <Btn title="Changer" small onPress={changerMotDePasse} loading={mdpEnCours} />
+          </>
+        }
+      >
+        <Input
+          label="Mot de passe actuel *"
+          value={mdp.actuel}
+          onChangeText={(t) => setMdp({ ...mdp, actuel: t })}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+        <Input
+          label="Nouveau mot de passe * (6 caractères minimum)"
+          value={mdp.nouveau}
+          onChangeText={(t) => setMdp({ ...mdp, nouveau: t })}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+        <Input
+          label="Confirmer le nouveau mot de passe *"
+          value={mdp.confirmation}
+          onChangeText={(t) => setMdp({ ...mdp, confirmation: t })}
+          secureTextEntry
+          autoCapitalize="none"
+        />
+      </Modale>
     </View>
   )
 }

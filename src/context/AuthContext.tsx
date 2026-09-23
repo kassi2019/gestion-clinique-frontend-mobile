@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import http from '../api/http'
+import http, { setOnUnauthorized } from '../api/http'
 
 type Module = { code: string; lecture: boolean; ecriture: boolean; validation: boolean }
 
@@ -52,6 +52,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })()
   }, [])
 
+  // Un 401 (jeton expiré) provoque une vraie déconnexion visuelle.
+  useEffect(() => {
+    setOnUnauthorized(() => {
+      logout()
+    })
+    return () => setOnUnauthorized(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function login(matricule: string, motDePasse: string) {
     const { data } = await http.post('/auth/login', { matricule, motDePasse })
     setToken(data.access_token)
@@ -63,6 +72,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   async function logout() {
+    // Comme le web : un médecin qui se déconnecte devient INDISPONIBLE
+    // (sinon le heartbeat mettrait 2 min à le retirer de la file).
+    if (user?.role?.code === 'MEDECIN') {
+      try {
+        await http.put('/consultations/disponibilite', { disponibilite: 'INDISPONIBLE' })
+      } catch {
+        /* silencieux : la déconnexion locale prime */
+      }
+    }
     setToken(null)
     setUser(null)
     await AsyncStorage.multiRemove(['token', 'user'])

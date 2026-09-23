@@ -1,15 +1,17 @@
 ﻿import React, { useEffect, useState } from 'react'
 import {
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native'
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { Card, Screen, SectionTitle } from '../components/ui'
+import { Btn, Card, Screen, SectionTitle } from '../components/ui'
 
 const MENUS = [
   { code: 'tableau-bord', label: 'Tableau de bord', icon: '📊' },
@@ -67,6 +69,16 @@ export default function StatistiquesScreen({ navigation }: { navigation: { goBac
   const [donnees, setDonnees] = useState<any>(null)
   const [chargement, setChargement] = useState(false)
 
+  // Période personnalisable (comme le web)
+  function aujourdhui(): string {
+    const d = new Date()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const j = String(d.getDate()).padStart(2, '0')
+    return `${d.getFullYear()}-${m}-${j}`
+  }
+  const [debut, setDebut] = useState(aujourdhui())
+  const [fin, setFin] = useState(aujourdhui())
+
   const ENDPOINTS: Record<string, string> = {
     'tableau-bord': '/statistiques/tableau-bord',
     frequentation: '/statistiques/frequentation',
@@ -78,10 +90,24 @@ export default function StatistiquesScreen({ navigation }: { navigation: { goBac
     maternite: '/statistiques/maternite',
   }
 
-  async function charger(code: string) {
+  const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/
+
+  async function charger(code: string, debutParam = debut, finParam = fin) {
+    if (!DATE_REGEX.test(debutParam) || !DATE_REGEX.test(finParam)) {
+      Alert.alert('Période', 'Dates au format AAAA-MM-JJ.')
+      return
+    }
+    if (debutParam > finParam) {
+      Alert.alert('Période', 'La date de début doit être avant (ou égale à) la date de fin.')
+      return
+    }
     setChargement(true)
     try {
-      const { data } = await http.get(ENDPOINTS[code], { params: { cliniqueId } })
+      const params: any =
+        code === 'tableau-bord'
+          ? { cliniqueId, jour: debutParam } // le tableau de bord est « un jour »
+          : { cliniqueId, debut: debutParam, fin: finParam }
+      const { data } = await http.get(ENDPOINTS[code], { params })
       setDonnees(data)
     } catch {
       setDonnees(null)
@@ -92,6 +118,7 @@ export default function StatistiquesScreen({ navigation }: { navigation: { goBac
 
   useEffect(() => {
     charger(rubrique)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rubrique])
 
   const fmtF = (x: any) => (x == null ? '—' : Number(x).toLocaleString('fr-FR'))
@@ -103,7 +130,22 @@ export default function StatistiquesScreen({ navigation }: { navigation: { goBac
           <Text style={styles.btnRetourTexte}>← Modules</Text>
         </TouchableOpacity>
         <Text style={styles.titre}>📊 Statistiques</Text>
-        <Text style={styles.periode}>Période : {donnees?.periode ?? 'aujourd\'hui'}</Text>
+        <Text style={styles.periode}>Période : {donnees?.periode ?? `${debut} → ${fin}`}</Text>
+        <View style={styles.periodeLigne}>
+          <TextInput
+            style={styles.periodeChamp}
+            placeholder="Du (AAAA-MM-JJ)"
+            value={debut}
+            onChangeText={setDebut}
+          />
+          <TextInput
+            style={styles.periodeChamp}
+            placeholder="Au (AAAA-MM-JJ)"
+            value={fin}
+            onChangeText={setFin}
+          />
+          <Btn title="Appliquer" small onPress={() => charger(rubrique)} />
+        </View>
       </View>
 
       {/* Menu des rubriques (défilement horizontal) */}
@@ -265,6 +307,18 @@ const styles = StyleSheet.create({
   btnRetourTexte: { color: colors.primaryDark, fontWeight: '800', fontSize: 13.5 },
   titre: { fontSize: 22, fontWeight: '800', color: colors.primaryDarker },
   periode: { fontSize: 12.5, color: colors.textMuted, marginTop: 2 },
+  periodeLigne: { flexDirection: 'row', gap: 8, marginTop: 10, alignItems: 'center' },
+  periodeChamp: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderColor: colors.borderChamp,
+    borderWidth: 1.5,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: colors.text,
+  },
   menu: { flexGrow: 0, marginBottom: 10 },
   menuItem: {
     backgroundColor: colors.surface,

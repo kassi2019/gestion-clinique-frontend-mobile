@@ -10,7 +10,10 @@ export function getApiUrl(): string {
   const hostUri: string | undefined = Constants.expoConfig?.hostUri
   if (hostUri) {
     const ip = hostUri.split(':')[0]
-    if (ip) return `http://${ip}:3000/api`
+     if (ip) return `http://${ip}:3000/api`
+    //return 'https://clinique.easymanagement.tech/api'
+
   }
-  return 'http://localhost:3000/api'
+   return 'http://localhost:3000/api'
+  //return 'https://clinique.easymanagement.tech/api'
 }

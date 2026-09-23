@@ -13,7 +13,18 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Input, Screen, SectionTitle } from '../components/ui'
+import {
+  ApercuTexte,
+  Badge,
+  Btn,
+  Card,
+  InfoLigne,
+  Input,
+  Modale,
+  PaginationBar,
+  Screen,
+  SectionTitle,
+} from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 
 type Patient = { id: number; nom: string; prenom: string; code: string; age?: string; sexe?: string }
@@ -23,8 +34,22 @@ type PassageJour = {
   id: number
   numeroOrdre: string
   statut: string
-  patient: { nom: string; prenom: string }
+  patient: {
+    nom: string
+    prenom: string
+    age?: string
+    sexe?: string
+    telephone?: string
+    ville?: string
+    quartier?: string
+    profession?: string
+  }
   service?: { nom: string }
+  serviceId?: number
+  typePatient?: string
+  motif?: string
+  referent?: string
+  prestationDemandee?: string
   taille?: string
   temperature?: number | null
   pouls?: number | null
@@ -68,6 +93,9 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   const [age, setAge] = useState('')
   const [sexe, setSexe] = useState('')
   const [telephone, setTelephone] = useState('')
+  const [ville, setVille] = useState('')
+  const [quartier, setQuartier] = useState('')
+  const [profession, setProfession] = useState('')
   const [serviceId, setServiceId] = useState<number | null>(null)
   const [typePatient, setTypePatient] = useState<'INTERNE' | 'EXTERNE'>('INTERNE')
   const [referent, setReferent] = useState('')
@@ -80,8 +108,49 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   // Liste du jour
   const [passages, setPassages] = useState<PassageJour[]>([])
   const [page, setPage] = useState(1)
+  const [totalPagesJour, setTotalPagesJour] = useState(1)
   const [rechercheJour, setRechercheJour] = useState('')
   const [chargementListe, setChargementListe] = useState(false)
+  const [filtreServiceJour, setFiltreServiceJour] = useState<number | null>(null)
+  const [filtreDebut, setFiltreDebut] = useState('')
+  const [filtreFin, setFiltreFin] = useState('')
+  const [compteurs, setCompteurs] = useState({ attente: 0, terminee: 0, jour: 0 })
+
+  // ── Assurance patient (patient existant) ──
+  const [assuranceVisible, setAssuranceVisible] = useState(false)
+  const [assurances, setAssurances] = useState<
+    { value: number; label: string; formules: { id: number; libelle: string }[] }[]
+  >([])
+  const [rattachements, setRattachements] = useState<any[]>([])
+  const [assuranceId, setAssuranceId] = useState<number | null>(null)
+  const [formuleId, setFormuleId] = useState<number | null>(null)
+  const [numeroAssure, setNumeroAssure] = useState('')
+  const [numeroCarte, setNumeroCarte] = useState('')
+  const [nomAssurePrincipal, setNomAssurePrincipal] = useState('')
+  const [typeBeneficiaire, setTypeBeneficiaire] = useState<string | null>(null)
+  const [debutCouverture, setDebutCouverture] = useState('')
+  const [finCouverture, setFinCouverture] = useState('')
+  const [savingAssurance, setSavingAssurance] = useState(false)
+
+  // ── Modification d'un passage ──
+  const [modifVisible, setModifVisible] = useState(false)
+  const [modifCible, setModifCible] = useState<PassageJour | null>(null)
+  const [modifForm, setModifForm] = useState({
+    nom: '',
+    prenom: '',
+    age: '',
+    sexe: '',
+    telephone: '',
+    ville: '',
+    quartier: '',
+    profession: '',
+    serviceId: null as number | null,
+    typePatient: 'INTERNE' as 'INTERNE' | 'EXTERNE',
+    motif: '',
+    referent: '',
+    prestationDemandee: '',
+  })
+  const [savingModif, setSavingModif] = useState(false)
 
   // Constantes
   const [filtreConstantes, setFiltreConstantes] = useState<'NON' | 'OUI'>('NON')
@@ -104,6 +173,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         /* listes vides */
       }
       chargerJour()
+      chargerCompteurs()
     })()
   }, [])
 
@@ -155,16 +225,47 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         params: {
           cliniqueId,
           search: rechercheJour.trim() || undefined,
+          serviceId: filtreServiceJour ?? undefined,
+          debut: filtreDebut || undefined,
+          fin: filtreFin || undefined,
           page: p,
           perPage: 20,
         },
       })
       setPassages(data.data ?? [])
       setPage(p)
+      setTotalPagesJour(data.totalPages ?? 1)
     } catch {
       setPassages([])
     } finally {
       setChargementListe(false)
+    }
+  }
+
+  // Recherche/filtres de la liste du jour : une seule requête après 300 ms
+  // (pas d'appel à chaque frappe).
+  useEffect(() => {
+    if (onglet !== 'jour') return
+    const timer = setTimeout(() => chargerJour(1), 300)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rechercheJour, filtreServiceJour, filtreDebut, filtreFin])
+
+  /** Compteurs des onglets (badges) : attente / terminées / total du jour. */
+  async function chargerCompteurs() {
+    try {
+      const [a, t, j] = await Promise.all([
+        http.get('/accueil/passages', { params: { cliniqueId, constantes: 'NON', perPage: 1 } }),
+        http.get('/accueil/passages', { params: { cliniqueId, constantes: 'OUI', perPage: 1 } }),
+        http.get('/accueil/passages', { params: { cliniqueId, page: 1, perPage: 1 } }),
+      ])
+      setCompteurs({
+        attente: a.data.total ?? 0,
+        terminee: t.data.total ?? 0,
+        jour: j.data.total ?? 0,
+      })
+    } catch {
+      /* compteurs à zéro */
     }
   }
 
@@ -272,6 +373,9 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           age: age || undefined,
           sexe: sexe || undefined,
           telephone: telephone || undefined,
+          ville: ville || undefined,
+          quartier: quartier || undefined,
+          profession: profession || undefined,
         }
       }
       const { data } = await http.post('/accueil/passages', payload)
@@ -282,15 +386,146 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       await imprimerTicket(data.id, data.numeroOrdre)
       // Réinitialiser
       setNom(''); setPrenom(''); setAge(''); setSexe(''); setTelephone('')
+      setVille(''); setQuartier(''); setProfession('')
       setPatientChoisi(null); setRecherchePatient(''); setResultatsPatients([])
       setServiceId(null); setTypePatient('INTERNE'); setReferent(''); setPrestationDemandee('')
       setConsultationId(null); setActePrestationId(null)
       chargerJour(1)
+      chargerCompteurs()
     } catch (e: any) {
       const msg = e.response?.data?.message
       Alert.alert('Erreur', Array.isArray(msg) ? msg.join('\n') : msg ?? 'Enregistrement impossible.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // ── Assurance du patient (patient existant) ──
+  async function ouvrirAssurance() {
+    if (!patientChoisi) return
+    setAssuranceId(null); setFormuleId(null)
+    setNumeroAssure(''); setNumeroCarte(''); setNomAssurePrincipal('')
+    setTypeBeneficiaire(null); setDebutCouverture(''); setFinCouverture('')
+    setAssuranceVisible(true)
+    try {
+      const [a, r] = await Promise.all([
+        http.get('/assurances', { params: { cliniqueId } }),
+        http.get(`/assurances/patients/${patientChoisi.id}`),
+      ])
+      setAssurances(
+        (Array.isArray(a.data) ? a.data : a.data?.data ?? []).map((x: any) => ({
+          value: x.id,
+          label: x.libelle ?? x.nom ?? '',
+          formules: (x.formules ?? []).filter((f: any) => f.actif !== false),
+        })),
+      )
+      setRattachements(Array.isArray(r.data) ? r.data : r.data?.data ?? r.data?.rattachements ?? [])
+    } catch {
+      setAssurances([])
+      setRattachements([])
+    }
+  }
+
+  async function rechargerRattachements() {
+    if (!patientChoisi) return
+    try {
+      const r = await http.get(`/assurances/patients/${patientChoisi.id}`)
+      setRattachements(Array.isArray(r.data) ? r.data : r.data?.data ?? r.data?.rattachements ?? [])
+    } catch {
+      setRattachements([])
+    }
+  }
+
+  async function rattacherAssurance() {
+    if (!patientChoisi || !assuranceId || !formuleId) {
+      Alert.alert('Assurance', 'Choisissez une assurance et une formule.')
+      return
+    }
+    setSavingAssurance(true)
+    try {
+      await http.post(`/assurances/patients/${patientChoisi.id}`, {
+        assuranceId,
+        formuleId,
+        numeroAssure: numeroAssure.trim() || undefined,
+        numeroCarte: numeroCarte.trim() || undefined,
+        nomAssurePrincipal: nomAssurePrincipal.trim() || undefined,
+        typeBeneficiaire: typeBeneficiaire ?? undefined,
+        dateDebut: debutCouverture || undefined,
+        dateFin: finCouverture || undefined,
+      })
+      Alert.alert('✅ Assurance rattachée', 'Le patient est couvert — la caisse appliquera la formule automatiquement.')
+      setAssuranceId(null); setFormuleId(null)
+      setNumeroAssure(''); setNumeroCarte(''); setNomAssurePrincipal('')
+      setTypeBeneficiaire(null); setDebutCouverture(''); setFinCouverture('')
+      await rechargerRattachements()
+    } catch (e: any) {
+      const msg = e.response?.data?.message
+      Alert.alert('Erreur', Array.isArray(msg) ? msg.join('\n') : msg ?? 'Rattachement impossible.')
+    } finally {
+      setSavingAssurance(false)
+    }
+  }
+
+  async function basculerRattachement(r: any) {
+    try {
+      await http.delete(`/assurances/patients/rattachements/${r.id}`)
+      await rechargerRattachements()
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Opération impossible.')
+    }
+  }
+
+  // ── Modification d'un passage ──
+  async function ouvrirModification(p: PassageJour) {
+    setModifCible(p)
+    setModifForm({
+      nom: p.patient?.nom ?? '',
+      prenom: p.patient?.prenom ?? '',
+      age: p.patient?.age ?? '',
+      sexe: p.patient?.sexe ?? '',
+      telephone: p.patient?.telephone ?? '',
+      ville: p.patient?.ville ?? '',
+      quartier: p.patient?.quartier ?? '',
+      profession: p.patient?.profession ?? '',
+      serviceId: p.serviceId ?? null,
+      typePatient: p.typePatient === 'EXTERNE' ? 'EXTERNE' : 'INTERNE',
+      motif: p.motif ?? '',
+      referent: p.referent ?? '',
+      prestationDemandee: p.prestationDemandee ?? '',
+    })
+    setModifVisible(true)
+  }
+
+  async function enregistrerModification() {
+    if (!modifCible) return
+    setSavingModif(true)
+    try {
+      await http.patch(`/accueil/passages/${modifCible.id}`, {
+        serviceId: modifForm.serviceId ?? undefined,
+        typePatient: modifForm.typePatient,
+        motif: modifForm.motif.trim() || undefined,
+        referent: modifForm.typePatient === 'EXTERNE' ? modifForm.referent.trim() || undefined : undefined,
+        prestationDemandee: modifForm.typePatient === 'EXTERNE' ? modifForm.prestationDemandee.trim() || undefined : undefined,
+        patient: {
+          nom: modifForm.nom.trim() || undefined,
+          prenom: modifForm.prenom.trim() || undefined,
+          age: modifForm.age || undefined,
+          sexe: modifForm.sexe || undefined,
+          telephone: modifForm.telephone || undefined,
+          ville: modifForm.ville || undefined,
+          quartier: modifForm.quartier || undefined,
+          profession: modifForm.profession || undefined,
+        },
+      })
+      Alert.alert('✅ Passage modifié')
+      setModifVisible(false)
+      chargerJour(page)
+      chargerCompteurs()
+    } catch (e: any) {
+      const msg = e.response?.data?.message
+      Alert.alert('Erreur', Array.isArray(msg) ? msg.join('\n') : msg ?? 'Modification impossible.')
+    } finally {
+      setSavingModif(false)
     }
   }
 
@@ -366,39 +601,59 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   return (
     <Screen>
       <View style={styles.bandeau}>
-        <TouchableOpacity style={styles.btnRetour} onPress={() => navigation.goBack()}>
+        <TouchableOpacity
+          style={styles.btnRetour}
+          onPress={() => navigation.goBack()}
+        >
           <Text style={styles.btnRetourTexte}>← Modules</Text>
         </TouchableOpacity>
         <View style={styles.bandeauTitre}>
           <View style={{ flex: 1 }}>
             <Text style={styles.titre}>🏥 Accueil</Text>
-            <Text style={styles.sousTitre}>{user?.clinique?.nom ?? 'Gestion Clinique'}</Text>
+            <Text style={styles.sousTitre}>
+              {user?.clinique?.nom ?? "Gestion Clinique"}
+            </Text>
           </View>
+      
           {peutBasculer ? (
-            <TouchableOpacity style={styles.btnBasculer} onPress={basculerPoste}>
+            <TouchableOpacity
+              style={styles.btnBasculer}
+              onPress={basculerPoste}
+            >
               <Text style={styles.btnBasculerTexte}>
-                ⚡ Basculer vers {posteConstante ? 'Enregistrement' : 'Constante'}
+                ⚡ Basculer vers{" "}
+                {posteConstante ? "Enregistrement" : "Constante"}
               </Text>
             </TouchableOpacity>
           ) : null}
+         
         </View>
       </View>
 
       {/* Onglets (masqués sur le poste CONSTANTE) */}
       {!posteConstante ? (
         <View style={styles.onglets}>
-          {(['nouveau', 'jour', 'constantes'] as const).map((o) => (
+          {(["nouveau", "jour", "constantes"] as const).map((o) => (
             <TouchableOpacity
               key={o}
               style={[styles.onglet, onglet === o && styles.ongletActif]}
               onPress={() => {
-                setOnglet(o)
-                if (o === 'constantes') chargerConstantes()
-                if (o === 'jour') chargerJour(1)
+                setOnglet(o);
+                if (o === "constantes") chargerConstantes();
+                if (o === "jour") chargerJour(1);
               }}
             >
-              <Text style={[styles.ongletTexte, onglet === o && styles.ongletTexteActif]}>
-                {o === 'nouveau' ? 'Nouveau passage' : o === 'jour' ? 'Passages du jour' : 'Constantes'}
+              <Text
+                style={[
+                  styles.ongletTexte,
+                  onglet === o && styles.ongletTexteActif,
+                ]}
+              >
+                {o === "nouveau"
+                  ? "Nouveau passage"
+                  : o === "jour"
+                    ? "Passages du jour"
+                    : "Constantes"}
               </Text>
             </TouchableOpacity>
           ))}
@@ -407,29 +662,46 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
 
       {posteConstante ? (
         blocConstantes
-      ) : onglet === 'nouveau' ? (        <>
+      ) : onglet === "nouveau" ? (
+        <>
           <Card>
             <SectionTitle>Patient</SectionTitle>
             <View style={styles.chips}>
               <TouchableOpacity
-                style={[styles.chip, modePatient === 'nouveau' && styles.chipActif]}
-                onPress={() => setModePatient('nouveau')}
+                style={[
+                  styles.chip,
+                  modePatient === "nouveau" && styles.chipActif,
+                ]}
+                onPress={() => setModePatient("nouveau")}
               >
-                <Text style={[styles.chipTexte, modePatient === 'nouveau' && styles.chipTexteActif]}>
+                <Text
+                  style={[
+                    styles.chipTexte,
+                    modePatient === "nouveau" && styles.chipTexteActif,
+                  ]}
+                >
                   Nouveau patient
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.chip, modePatient === 'existant' && styles.chipActif]}
-                onPress={() => setModePatient('existant')}
+                style={[
+                  styles.chip,
+                  modePatient === "existant" && styles.chipActif,
+                ]}
+                onPress={() => setModePatient("existant")}
               >
-                <Text style={[styles.chipTexte, modePatient === 'existant' && styles.chipTexteActif]}>
+                <Text
+                  style={[
+                    styles.chipTexte,
+                    modePatient === "existant" && styles.chipTexteActif,
+                  ]}
+                >
                   Patient existant
                 </Text>
               </TouchableOpacity>
             </View>
 
-            {modePatient === 'existant' ? (
+            {modePatient === "existant" ? (
               <>
                 <Input
                   label="Rechercher (code patient ou nom)"
@@ -445,28 +717,49 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                   >
                     <Text style={styles.patientItemTexte}>
                       {pt.nom} {pt.prenom} · {pt.code}
-                      {pt.age ? ` · ${pt.age} ans` : ''}
+                      {pt.age ? ` · ${pt.age} ans` : ""}
                     </Text>
                   </TouchableOpacity>
                 ))}
                 {patientChoisi ? (
                   <View style={styles.patientChoisi}>
                     <Text style={styles.patientChoisiTexte}>
-                      ✅ {patientChoisi.nom} {patientChoisi.prenom} ({patientChoisi.code})
+                      ✅ {patientChoisi.nom} {patientChoisi.prenom} (
+                      {patientChoisi.code})
                     </Text>
+                    <Btn
+                      title="🛡️ Assurance du patient"
+                      small
+                      variant="outline"
+                      onPress={ouvrirAssurance}
+                    />
                   </View>
                 ) : null}
               </>
             ) : (
               <>
                 <Input label="Nom *" value={nom} onChangeText={setNom} />
-                <Input label="Prénoms" value={prenom} onChangeText={setPrenom} />
+                <Input
+                  label="Prénoms"
+                  value={prenom}
+                  onChangeText={setPrenom}
+                />
                 <View style={styles.ligne}>
                   <View style={styles.ligneItem}>
-                    <Input label="Âge" value={age} onChangeText={setAge} keyboardType="numeric" />
+                    <Input
+                      label="Âge"
+                      value={age}
+                      onChangeText={setAge}
+                      keyboardType="numeric"
+                    />
                   </View>
                   <View style={styles.ligneItem}>
-                    <Input label="Sexe" value={sexe} onChangeText={setSexe} placeholder="M / F" />
+                    <Input
+                      label="Sexe"
+                      value={sexe}
+                      onChangeText={setSexe}
+                      placeholder="M / F"
+                    />
                   </View>
                 </View>
                 <Input
@@ -475,6 +768,23 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                   onChangeText={setTelephone}
                   keyboardType="phone-pad"
                 />
+                <Input label="Ville" value={ville} onChangeText={setVille} />
+                <View style={styles.ligne}>
+                  <View style={styles.ligneItem}>
+                    <Input
+                      label="Quartier"
+                      value={quartier}
+                      onChangeText={setQuartier}
+                    />
+                  </View>
+                  <View style={styles.ligneItem}>
+                    <Input
+                      label="Profession"
+                      value={profession}
+                      onChangeText={setProfession}
+                    />
+                  </View>
+                </View>
               </>
             )}
           </Card>
@@ -493,7 +803,10 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
               <Input label="Type de consultation *">
                 <ListeSelect
                   value={consultationId}
-                  options={consultationsDuService.map((p) => ({ value: p.id, label: p.libelle }))}
+                  options={consultationsDuService.map((p) => ({
+                    value: p.id,
+                    label: p.libelle,
+                  }))}
                   placeholder="— Choisir —"
                   onChange={(v) => setConsultationId(v as number)}
                 />
@@ -503,13 +816,13 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
               <ListeSelect
                 value={typePatient}
                 options={[
-                  { value: 'INTERNE', label: 'Patient interne' },
-                  { value: 'EXTERNE', label: 'Patient externe' },
+                  { value: "INTERNE", label: "Patient interne" },
+                  { value: "EXTERNE", label: "Patient externe" },
                 ]}
-                onChange={(v) => setTypePatient(v as 'INTERNE' | 'EXTERNE')}
+                onChange={(v) => setTypePatient(v as "INTERNE" | "EXTERNE")}
               />
             </Input>
-            {typePatient === 'EXTERNE' ? (
+            {typePatient === "EXTERNE" ? (
               <>
                 <Input
                   label="Structure / professionnel référent"
@@ -521,7 +834,10 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                   <Input label="Acte à payer (l'examen prescrit)">
                     <ListeSelect
                       value={actePrestationId}
-                      options={actesDuService.map((p) => ({ value: p.id, label: p.libelle }))}
+                      options={actesDuService.map((p) => ({
+                        value: p.id,
+                        label: p.libelle,
+                      }))}
                       placeholder="— Choisir l'examen de l'ordonnance —"
                       onChange={(v) => setActePrestationId(v as number)}
                     />
@@ -535,24 +851,53 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                 />
               </>
             ) : null}
-            <Btn title="Enregistrer le passage" onPress={enregistrerPassage} loading={saving} />
+            <Btn
+              title="Enregistrer le passage"
+              onPress={enregistrerPassage}
+              loading={saving}
+            />
           </Card>
 
           {ticket ? <ApercuTexte contenu={ticket} /> : null}
         </>
-      ) : onglet === 'jour' ? (
+      ) : onglet === "jour" ? (
         <Card>
-          <SectionTitle>Passages du jour</SectionTitle>
+          <SectionTitle>Passages du jour ({compteurs.jour})</SectionTitle>
           <View style={styles.barreRecherche}>
             <TextInput
               style={styles.rechercheJour}
               placeholder="Rechercher…"
               value={rechercheJour}
-              onChangeText={(t) => {
-                setRechercheJour(t)
-                chargerJour(1)
-              }}
+              onChangeText={setRechercheJour}
             />
+          </View>
+          <View style={styles.ligne}>
+            <View style={styles.ligneItem}>
+              <Input label="Service">
+                <ListeSelect
+                  value={filtreServiceJour}
+                  options={services.map((s) => ({ value: s.id, label: s.nom }))}
+                  placeholder="Tous les services"
+                  onChange={(v) => setFiltreServiceJour(v as number | null)}
+                />
+              </Input>
+            </View>
+            <View style={styles.ligneItem}>
+              <Input
+                label="Du"
+                value={filtreDebut}
+                onChangeText={setFiltreDebut}
+                placeholder="AAAA-MM-JJ"
+              />
+            </View>
+            <View style={styles.ligneItem}>
+              <Input
+                label="Au"
+                value={filtreFin}
+                onChangeText={setFiltreFin}
+                placeholder="AAAA-MM-JJ"
+              />
+            </View>
           </View>
           <FlatList
             data={passages}
@@ -565,8 +910,17 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                   <Text style={styles.passagePatient}>
                     {item.patient.nom} {item.patient.prenom}
                   </Text>
-                  <Badge label={item.statut} tone={item.statut === 'ACTIF' ? 'success' : 'warning'} />
+                  <Badge
+                    label={item.statut}
+                    tone={item.statut === "ACTIF" ? "success" : "warning"}
+                  />
                 </View>
+                <Btn
+                  title="✏️ Modifier"
+                  small
+                  variant="outline"
+                  onPress={() => ouvrirModification(item)}
+                />
                 <Btn
                   title="🖨️ Ticket"
                   small
@@ -576,8 +930,15 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
               </View>
             )}
             ListEmptyComponent={
-              <Text style={styles.vide}>{chargementListe ? 'Chargement…' : 'Aucun passage ce jour.'}</Text>
+              <Text style={styles.vide}>
+                {chargementListe ? "Chargement…" : "Aucun passage ce jour."}
+              </Text>
             }
+          />
+          <PaginationBar
+            page={page}
+            totalPages={totalPagesJour}
+            onPage={(p) => chargerJour(p)}
           />
         </Card>
       ) : (
@@ -594,44 +955,374 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         <View style={styles.modalVoile}>
           <View style={styles.modalCarte}>
             <Text style={styles.modalTitre}>
-              ✍️ Constantes — {constanteCible?.patient.nom} {constanteCible?.patient.prenom}
+              ✍️ Constantes — {constanteCible?.patient.nom}{" "}
+              {constanteCible?.patient.prenom}
             </Text>
-            <Text style={styles.modalSousTitre}>{constanteCible?.numeroOrdre}</Text>
+            <Text style={styles.modalSousTitre}>
+              {constanteCible?.numeroOrdre}
+            </Text>
             <ScrollView style={styles.modalScroll}>
               <View style={styles.ligne}>
                 <View style={styles.ligneItem}>
-                  <Input label="Taille (cm)" value={formConst.taille} onChangeText={(t) => setFormConst({ ...formConst, taille: t })} />
+                  <Input
+                    label="Taille (cm)"
+                    value={formConst.taille}
+                    onChangeText={(t) =>
+                      setFormConst({ ...formConst, taille: t })
+                    }
+                  />
                 </View>
                 <View style={styles.ligneItem}>
-                  <Input label="Température (°C)" value={formConst.temperature} onChangeText={(t) => setFormConst({ ...formConst, temperature: t })} keyboardType="numeric" />
+                  <Input
+                    label="Température (°C)"
+                    value={formConst.temperature}
+                    onChangeText={(t) =>
+                      setFormConst({ ...formConst, temperature: t })
+                    }
+                    keyboardType="numeric"
+                  />
                 </View>
               </View>
               <View style={styles.ligne}>
                 <View style={styles.ligneItem}>
-                  <Input label="Pouls (bpm)" value={formConst.pouls} onChangeText={(t) => setFormConst({ ...formConst, pouls: t })} keyboardType="numeric" />
+                  <Input
+                    label="Pouls (bpm)"
+                    value={formConst.pouls}
+                    onChangeText={(t) =>
+                      setFormConst({ ...formConst, pouls: t })
+                    }
+                    keyboardType="numeric"
+                  />
                 </View>
                 <View style={styles.ligneItem}>
-                  <Input label="Poids (kg)" value={formConst.poids} onChangeText={(t) => setFormConst({ ...formConst, poids: t })} keyboardType="numeric" />
+                  <Input
+                    label="Poids (kg)"
+                    value={formConst.poids}
+                    onChangeText={(t) =>
+                      setFormConst({ ...formConst, poids: t })
+                    }
+                    keyboardType="numeric"
+                  />
                 </View>
               </View>
               <View style={styles.ligne}>
                 <View style={styles.ligneItem}>
-                  <Input label="TA gauche (ex : 12/8)" value={formConst.tensionGauche} onChangeText={(t) => setFormConst({ ...formConst, tensionGauche: t })} />
+                  <Input
+                    label="TA gauche (ex : 12/8)"
+                    value={formConst.tensionGauche}
+                    onChangeText={(t) =>
+                      setFormConst({ ...formConst, tensionGauche: t })
+                    }
+                  />
                 </View>
                 <View style={styles.ligneItem}>
-                  <Input label="TA droite (ex : 12/8)" value={formConst.tensionDroite} onChangeText={(t) => setFormConst({ ...formConst, tensionDroite: t })} />
+                  <Input
+                    label="TA droite (ex : 12/8)"
+                    value={formConst.tensionDroite}
+                    onChangeText={(t) =>
+                      setFormConst({ ...formConst, tensionDroite: t })
+                    }
+                  />
                 </View>
               </View>
             </ScrollView>
             <View style={styles.modalActions}>
-              <Btn title="Annuler" variant="outline" onPress={() => setConstanteCible(null)} />
-              <Btn title="💾 Enregistrer" onPress={enregistrerConstantes} loading={savingConst} />
+              <Btn
+                title="Annuler"
+                variant="outline"
+                onPress={() => setConstanteCible(null)}
+              />
+              <Btn
+                title="💾 Enregistrer"
+                onPress={enregistrerConstantes}
+                loading={savingConst}
+              />
             </View>
           </View>
         </View>
       </Modal>
+
+      {/* Modale : assurance du patient */}
+      <Modale
+        visible={assuranceVisible}
+        titre="🛡️ Assurance du patient"
+        sousTitre={
+          patientChoisi
+            ? `${patientChoisi.nom} ${patientChoisi.prenom} (${patientChoisi.code})`
+            : undefined
+        }
+        onFermer={() => setAssuranceVisible(false)}
+      >
+        <Input label="Assurance *" required>
+          <ListeSelect
+            value={assuranceId}
+            options={assurances.map((a) => ({
+              value: a.value,
+              label: a.label,
+            }))}
+            placeholder="— Choisir une assurance —"
+            onChange={(v) => {
+              setAssuranceId(v as number);
+              setFormuleId(null);
+            }}
+          />
+        </Input>
+        <Input label="Formule *" required>
+          <ListeSelect
+            value={formuleId}
+            options={(
+              assurances.find((a) => a.value === assuranceId)?.formules ?? []
+            ).map((f) => ({
+              value: f.id,
+              label: f.libelle,
+            }))}
+            placeholder="— Choisir une formule —"
+            onChange={(v) => setFormuleId(v as number)}
+            disabled={!assuranceId}
+          />
+        </Input>
+        <Input
+          label="N° d'assuré"
+          value={numeroAssure}
+          onChangeText={setNumeroAssure}
+        />
+        <Input
+          label="N° de carte"
+          value={numeroCarte}
+          onChangeText={setNumeroCarte}
+        />
+        <Input
+          label="Assuré principal"
+          value={nomAssurePrincipal}
+          onChangeText={setNomAssurePrincipal}
+        />
+        <View style={{ marginBottom: 8 }}>
+          <Text style={styles.modalLabel}>Type de bénéficiaire</Text>
+          <View style={styles.chips}>
+            {["ASSURE", "CONJOINT", "ENFANT", "AUTRE"].map((t) => (
+              <TouchableOpacity
+                key={t}
+                style={[
+                  styles.chip,
+                  typeBeneficiaire === t && styles.chipActif,
+                ]}
+                onPress={() =>
+                  setTypeBeneficiaire(typeBeneficiaire === t ? null : t)
+                }
+              >
+                <Text
+                  style={[
+                    styles.chipTexte,
+                    typeBeneficiaire === t && styles.chipTexteActif,
+                  ]}
+                >
+                  {t}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+        <View style={styles.ligne}>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Début de couverture"
+              value={debutCouverture}
+              onChangeText={setDebutCouverture}
+              placeholder="AAAA-MM-JJ"
+            />
+          </View>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Fin de couverture"
+              value={finCouverture}
+              onChangeText={setFinCouverture}
+              placeholder="AAAA-MM-JJ"
+            />
+          </View>
+        </View>
+
+        <SectionTitle>Rattachements existants</SectionTitle>
+        {rattachements.length === 0 ? (
+          <Text style={styles.vide}>Aucun rattachement.</Text>
+        ) : (
+          rattachements.map((r) => (
+            <View key={r.id} style={styles.rattachementItem}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.passagePatient}>
+                  {r.assurance?.libelle ?? r.assurance?.nom ?? "Assurance"} —{" "}
+                  {r.formule?.libelle ?? ""}
+                  {r.numeroAssure ? ` · N° ${r.numeroAssure}` : ""}
+                </Text>
+              </View>
+              <Badge
+                label={r.statut === "ACTIF" ? "Actif" : "Inactif"}
+                tone={r.statut === "ACTIF" ? "success" : "muted"}
+              />
+              <Btn
+                title={r.statut === "ACTIF" ? "Désactiver" : "Réactiver"}
+                small
+                variant={r.statut === "ACTIF" ? "danger" : "outline"}
+                onPress={() => basculerRattachement(r)}
+              />
+            </View>
+          ))
+        )}
+
+        <View style={styles.modalActions}>
+          <Btn
+            title="Fermer"
+            variant="outline"
+            onPress={() => setAssuranceVisible(false)}
+          />
+          <Btn
+            title="💾 Rattacher"
+            onPress={rattacherAssurance}
+            loading={savingAssurance}
+          />
+        </View>
+      </Modale>
+
+      {/* Modale : modification d'un passage */}
+      <Modale
+        visible={modifVisible}
+        titre="✏️ Modifier le passage"
+        sousTitre={modifCible?.numeroOrdre}
+        onFermer={() => setModifVisible(false)}
+        actions={
+          <>
+            <Btn
+              title="Fermer"
+              variant="outline"
+              onPress={() => setModifVisible(false)}
+            />
+            <Btn
+              title="💾 Enregistrer"
+              onPress={enregistrerModification}
+              loading={savingModif}
+            />
+          </>
+        }
+      >
+        <SectionTitle>Patient</SectionTitle>
+        <View style={styles.ligne}>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Nom"
+              value={modifForm.nom}
+              onChangeText={(t) => setModifForm({ ...modifForm, nom: t })}
+            />
+          </View>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Prénoms"
+              value={modifForm.prenom}
+              onChangeText={(t) => setModifForm({ ...modifForm, prenom: t })}
+            />
+          </View>
+        </View>
+        <View style={styles.ligne}>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Âge"
+              value={modifForm.age}
+              onChangeText={(t) => setModifForm({ ...modifForm, age: t })}
+              keyboardType="numeric"
+            />
+          </View>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Sexe"
+              value={modifForm.sexe}
+              onChangeText={(t) => setModifForm({ ...modifForm, sexe: t })}
+              placeholder="M / F"
+            />
+          </View>
+        </View>
+        <View style={styles.ligne}>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Téléphone"
+              value={modifForm.telephone}
+              onChangeText={(t) => setModifForm({ ...modifForm, telephone: t })}
+              keyboardType="phone-pad"
+            />
+          </View>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Ville"
+              value={modifForm.ville}
+              onChangeText={(t) => setModifForm({ ...modifForm, ville: t })}
+            />
+          </View>
+        </View>
+        <View style={styles.ligne}>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Quartier"
+              value={modifForm.quartier}
+              onChangeText={(t) => setModifForm({ ...modifForm, quartier: t })}
+            />
+          </View>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Profession"
+              value={modifForm.profession}
+              onChangeText={(t) =>
+                setModifForm({ ...modifForm, profession: t })
+              }
+            />
+          </View>
+        </View>
+        <SectionTitle>Passage</SectionTitle>
+        <Input label="Service">
+          <ListeSelect
+            value={modifForm.serviceId}
+            options={services.map((s) => ({ value: s.id, label: s.nom }))}
+            placeholder="— Choisir un service —"
+            onChange={(v) =>
+              setModifForm({ ...modifForm, serviceId: v as number | null })
+            }
+          />
+        </Input>
+        <Input label="Type de patient">
+          <ListeSelect
+            value={modifForm.typePatient}
+            options={[
+              { value: "INTERNE", label: "Patient interne" },
+              { value: "EXTERNE", label: "Patient externe" },
+            ]}
+            onChange={(v) =>
+              setModifForm({
+                ...modifForm,
+                typePatient: v as "INTERNE" | "EXTERNE",
+              })
+            }
+          />
+        </Input>
+        {modifForm.typePatient === "EXTERNE" ? (
+          <>
+            <Input
+              label="Structure / professionnel référent"
+              value={modifForm.referent}
+              onChangeText={(t) => setModifForm({ ...modifForm, referent: t })}
+            />
+            <Input
+              label="Précision sur la prestation"
+              value={modifForm.prestationDemandee}
+              onChangeText={(t) =>
+                setModifForm({ ...modifForm, prestationDemandee: t })
+              }
+            />
+          </>
+        ) : null}
+        <Input
+          label="Motif"
+          value={modifForm.motif}
+          onChangeText={(t) => setModifForm({ ...modifForm, motif: t })}
+        />
+      </Modale>
     </Screen>
-  )
+  );
 }
 
 const styles = StyleSheet.create({
@@ -712,6 +1403,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     fontSize: 14,
+  },
+  modalLabel: { fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 6 },
+  rattachementItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    paddingVertical: 10,
   },
   passageItem: {
     flexDirection: 'row',

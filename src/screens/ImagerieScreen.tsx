@@ -11,7 +11,7 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { Badge, Btn, Card, Input, Screen, SectionTitle } from '../components/ui'
+import { ApercuTexte, Badge, Btn, Card, Input, Onglets, PaginationBar, Screen, SectionTitle } from '../components/ui'
 
 type PassageRef = {
   id: number
@@ -35,6 +35,64 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
   const [crCible, setCrCible] = useState<any>(null)
   const [crForm, setCrForm] = useState({ indication: '', technique: '', resultat: '', conclusion: '' })
   const [enCours, setEnCours] = useState(false)
+
+  // ── Historique ──
+  const [onglet, setOnglet] = useState<'en_cours' | 'historique'>('en_cours')
+  const [histoJour, setHistoJour] = useState('')
+  const [histoRecherche, setHistoRecherche] = useState('')
+  const [histoListe, setHistoListe] = useState<any[]>([])
+  const [histoPage, setHistoPage] = useState(1)
+  const [histoTotalPages, setHistoTotalPages] = useState(1)
+  const [histoChargement, setHistoChargement] = useState(false)
+  const [apercu, setApercu] = useState<string | null>(null)
+
+  async function chargerHistorique(p = 1) {
+    setHistoChargement(true)
+    try {
+      const { data } = await http.get('/imagerie/examens', {
+        params: {
+          cliniqueId,
+          jour: histoJour || undefined,
+          recherche: histoRecherche.trim() || undefined,
+          page: p,
+          perPage: 20,
+        },
+      })
+      setHistoListe(data.data ?? [])
+      setHistoPage(p)
+      setHistoTotalPages(data.totalPages ?? 1)
+    } catch {
+      setHistoListe([])
+    } finally {
+      setHistoChargement(false)
+    }
+  }
+
+  useEffect(() => {
+    if (onglet === 'historique' && !passage) {
+      const t = setTimeout(() => chargerHistorique(1), 300)
+      return () => clearTimeout(t)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onglet, histoJour, histoRecherche])
+
+  function voirCompteRendu(e: any) {
+    setApercu(
+      [
+        `COMPTE RENDU IMAGERIE`,
+        '',
+        `${e.passage?.patient?.nom ?? ''} ${e.passage?.patient?.prenom ?? ''}`,
+        `${e.passage?.numeroOrdre ?? ''}`,
+        e.prestation?.libelle ?? '',
+        '------------------------------------------',
+        `Indication : ${e.indication ?? '—'}`,
+        `Technique : ${e.technique ?? '—'}`,
+        `Résultat : ${e.resultat ?? '—'}`,
+        '',
+        `Conclusion : ${e.conclusion ?? '—'}`,
+      ].join('\n'),
+    )
+  }
 
   useEffect(() => {
     const q = recherche.trim()
@@ -159,16 +217,58 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
 
       {!passage ? (
         <View style={{ padding: 16 }}>
-          {resultats.map((r) => (
-            <TouchableOpacity key={r.id} style={styles.item} onPress={() => choisirPassage(r)}>
-              <Text style={styles.itemTitre}>
-                {r.patient.nom} {r.patient.prenom}
-              </Text>
-              <Text style={styles.itemSous}>
-                {r.numeroOrdre} · {r.nbExamensIma ?? 0} examen(s) payé(s)
-              </Text>
-            </TouchableOpacity>
-          ))}
+          <Onglets
+            actif={onglet}
+            onChange={(k) => setOnglet(k as typeof onglet)}
+            tabs={[
+              { key: 'en_cours', label: 'En cours' },
+              { key: 'historique', label: 'Historique' },
+            ]}
+          />
+          {onglet === 'en_cours' ? (
+            <>
+              {resultats.map((r) => (
+                <TouchableOpacity key={r.id} style={styles.item} onPress={() => choisirPassage(r)}>
+                  <Text style={styles.itemTitre}>
+                    {r.patient.nom} {r.patient.prenom}
+                  </Text>
+                  <Text style={styles.itemSous}>
+                    {r.numeroOrdre} · {r.nbExamensIma ?? 0} examen(s) payé(s)
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </>
+          ) : (
+            <>
+              <View style={styles.ligne}>
+                <View style={styles.ligneItem}>
+                  <Input label="Jour (AAAA-MM-JJ)" value={histoJour} onChangeText={setHistoJour} />
+                </View>
+                <View style={styles.ligneItem}>
+                  <Input label="Rechercher" value={histoRecherche} onChangeText={setHistoRecherche} />
+                </View>
+              </View>
+              {histoChargement ? <Text style={styles.vide}>Chargement…</Text> : null}
+              {!histoChargement && histoListe.length === 0 ? (
+                <Text style={styles.vide}>Aucun examen.</Text>
+              ) : null}
+              {histoListe.map((e) => (
+                <TouchableOpacity key={e.id} style={styles.item} onPress={() => voirCompteRendu(e)}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemTitre}>
+                      {e.passage?.patient?.nom ?? ''} {e.passage?.patient?.prenom ?? ''}
+                    </Text>
+                    <Text style={styles.itemSous}>
+                      {e.passage?.numeroOrdre ?? ''} · {e.prestation?.libelle ?? ''}
+                    </Text>
+                  </View>
+                  <Badge label={e.statut ?? ''} tone={e.statut === 'VALIDEE' || e.statut === 'Validé' ? 'success' : 'muted'} />
+                </TouchableOpacity>
+              ))}
+              <PaginationBar page={histoPage} totalPages={histoTotalPages} onPage={(p) => chargerHistorique(p)} />
+              {apercu ? <ApercuTexte contenu={apercu} /> : null}
+            </>
+          )}
         </View>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
@@ -274,6 +374,8 @@ const styles = StyleSheet.create({
   },
   medNom: { fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: 4 },
   vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 16 },
+  ligne: { flexDirection: 'row', gap: 10 },
+  ligneItem: { flex: 1 },
   modalVoile: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.55)',

@@ -1,12 +1,14 @@
 import React from 'react'
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   TextInputProps,
+  TouchableOpacity,
   View,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -128,6 +130,136 @@ export function ApercuTexte({ contenu }: { contenu: string }) {
   )
 }
 
+/** Bandeau d'écran : bouton retour + titre (remplace les styles dupliqués). */
+export function Bandeau({ titre, onRetour }: { titre: string; onRetour: () => void }) {
+  return (
+    <View style={styles.bandeau}>
+      <TouchableOpacity style={styles.btnRetour} onPress={onRetour}>
+        <Text style={styles.btnRetourTexte}>← Modules</Text>
+      </TouchableOpacity>
+      <Text style={styles.titre}>{titre}</Text>
+    </View>
+  )
+}
+
+/** Onglets segmentés avec compteur optionnel (comme .tabs-nav du web). */
+export function Onglets({
+  tabs,
+  actif,
+  onChange,
+}: {
+  tabs: { key: string; label: string; count?: number }[]
+  actif: string
+  onChange: (key: string) => void
+}) {
+  return (
+    <View style={styles.onglets}>
+      {tabs.map((t) => (
+        <TouchableOpacity
+          key={t.key}
+          style={[styles.onglet, actif === t.key && styles.ongletActif]}
+          onPress={() => onChange(t.key)}
+        >
+          <Text style={[styles.ongletTexte, actif === t.key && styles.ongletTexteActif]}>{t.label}</Text>
+          {t.count != null ? (
+            <View style={[styles.ongletCount, actif === t.key && styles.ongletCountActif]}>
+              <Text style={[styles.ongletCountTexte, actif === t.key && styles.ongletCountTexteActif]}>
+                {t.count}
+              </Text>
+            </View>
+          ) : null}
+        </TouchableOpacity>
+      ))}
+    </View>
+  )
+}
+
+/** Chips à choix unique (tolère une valeur null = non renseigné). */
+export function Chips({
+  options,
+  value,
+  onChange,
+}: {
+  options: string[]
+  value: string | null
+  onChange: (v: string) => void
+}) {
+  return (
+    <View style={styles.chips}>
+      {options.map((o) => (
+        <TouchableOpacity
+          key={o}
+          style={[styles.chip, value === o && styles.chipActif]}
+          onPress={() => onChange(o)}
+        >
+          <Text style={[styles.chipTexte, value === o && styles.chipTexteActif]}>{o}</Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  )
+}
+
+/** Pagination « ← Précédent | Page X / Y | Suivant → » (équivalent PaginationBar web). */
+export function PaginationBar({
+  page,
+  totalPages,
+  onPage,
+}: {
+  page: number
+  totalPages: number
+  onPage: (p: number) => void
+}) {
+  if (totalPages <= 1) return null
+  return (
+    <View style={styles.pagination}>
+      <Btn small variant="outline" title="← Précédent" disabled={page <= 1} onPress={() => onPage(page - 1)} />
+      <Text style={styles.paginationTexte}>
+        Page {page} / {totalPages}
+      </Text>
+      <Btn small variant="outline" title="Suivant →" disabled={page >= totalPages} onPress={() => onPage(page + 1)} />
+    </View>
+  )
+}
+
+/** Modale bottom-sheet générique (titre + fermeture + contenu scrollable + actions). */
+export function Modale({
+  visible,
+  titre,
+  sousTitre,
+  onFermer,
+  children,
+  actions,
+}: {
+  visible: boolean
+  titre?: string
+  sousTitre?: string
+  onFermer: () => void
+  children: React.ReactNode
+  actions?: React.ReactNode
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onFermer}>
+      <View style={styles.modalVoile}>
+        <View style={styles.modalCarte}>
+          <View style={styles.modalEntete}>
+            <View style={{ flex: 1 }}>
+              {titre ? <Text style={styles.modalTitre}>{titre}</Text> : null}
+              {sousTitre ? <Text style={styles.modalSousTitre}>{sousTitre}</Text> : null}
+            </View>
+            <TouchableOpacity onPress={onFermer} style={styles.modalFermer}>
+              <Text style={styles.modalFermerTexte}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" style={styles.modalScroll}>
+            {children}
+          </ScrollView>
+          {actions ? <View style={styles.modalActions}>{actions}</View> : null}
+        </View>
+      </View>
+    </Modal>
+  )
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   screenPadded: { padding: 16, paddingBottom: 40 },
@@ -201,4 +333,95 @@ const styles = StyleSheet.create({
   apercuTitre: { fontSize: 13, fontWeight: '800', color: '#134e4a', marginBottom: 8, textAlign: 'center' },
   apercuScroll: { maxHeight: 320 },
   apercuTexte: { fontFamily: 'monospace', fontSize: 11, color: '#1e293b' },
+  bandeau: { marginBottom: 12 },
+  btnRetour: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.surface,
+    borderColor: colors.primary,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  btnRetourTexte: { color: colors.primaryDark, fontWeight: '800', fontSize: 13.5 },
+  titre: { fontSize: 22, fontWeight: '800', color: colors.primaryDarker, marginTop: 4 },
+  onglets: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderBottomColor: '#d5eee9',
+    borderBottomWidth: 2,
+    marginBottom: 12,
+    borderRadius: 0,
+  },
+  onglet: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
+    borderBottomWidth: 3,
+    borderBottomColor: 'transparent',
+  },
+  ongletActif: { borderBottomColor: colors.primary },
+  ongletTexte: { fontSize: 13, fontWeight: '700', color: '#5f857f' },
+  ongletTexteActif: { color: colors.primaryDark },
+  ongletCount: {
+    backgroundColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 1,
+  },
+  ongletCountActif: { backgroundColor: colors.primary },
+  ongletCountTexte: { fontSize: 11.5, fontWeight: '700', color: '#475569' },
+  ongletCountTexteActif: { color: '#fff' },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  chip: {
+    borderColor: colors.borderChamp,
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    backgroundColor: colors.surface,
+  },
+  chipActif: { backgroundColor: colors.primary, borderColor: colors.primary },
+  chipTexte: { fontWeight: '700', fontSize: 13, color: colors.textMuted },
+  chipTexteActif: { color: '#fff' },
+  pagination: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginTop: 12,
+  },
+  paginationTexte: { fontSize: 13, fontWeight: '700', color: colors.textMuted },
+  modalVoile: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    justifyContent: 'flex-end',
+  },
+  modalCarte: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 18,
+    borderTopRightRadius: 18,
+    padding: 16,
+    maxHeight: '85%',
+  },
+  modalEntete: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 12 },
+  modalTitre: { fontSize: 17, fontWeight: '800', color: colors.primaryDarker },
+  modalSousTitre: { fontSize: 12.5, color: colors.textMuted, marginTop: 2 },
+  modalFermer: { padding: 6, marginLeft: 10 },
+  modalFermerTexte: { fontSize: 16, fontWeight: '800', color: colors.textMuted },
+  modalScroll: { flexGrow: 0 },
+  modalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'flex-end',
+    marginTop: 14,
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    paddingTop: 12,
+  },
 })
