@@ -946,7 +946,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     </View>
                   </View>
                   <Btn
-                    title="＋ Ajouter à la prescription"
+                    title="＋ Ajouter"
                     small
                     onPress={ajouterMedicamentFiche}
                     loading={ficheMedEnCours}
