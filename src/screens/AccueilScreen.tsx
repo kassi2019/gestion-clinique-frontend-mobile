@@ -56,6 +56,8 @@ type PassageJour = {
   tensionGauche?: string
   tensionDroite?: string
   poids?: number | null
+  perimetreBrachial?: string
+  perimetreCranien?: string
 }
 
 export default function AccueilScreen({ navigation }: { navigation: { goBack: () => void } }) {
@@ -157,7 +159,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   const [passagesConstantes, setPassagesConstantes] = useState<PassageJour[]>([])
   const [chargementConstantes, setChargementConstantes] = useState(false)
   const [constanteCible, setConstanteCible] = useState<PassageJour | null>(null)
-  const [formConst, setFormConst] = useState({ taille: '', temperature: '', pouls: '', tensionGauche: '', tensionDroite: '', poids: '' })
+  const [formConst, setFormConst] = useState({ taille: '', temperature: '', pouls: '', tensionGauche: '', tensionDroite: '', poids: '', perimetreBrachial: '', perimetreCranien: '' })
   const [savingConst, setSavingConst] = useState(false)
 
   useEffect(() => {
@@ -293,6 +295,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       tensionGauche: p.tensionGauche ?? '',
       tensionDroite: p.tensionDroite ?? '',
       poids: p.poids != null ? String(p.poids) : '',
+      perimetreBrachial: p.perimetreBrachial ?? '',
+      perimetreCranien: p.perimetreCranien ?? '',
     })
   }
 
@@ -307,6 +311,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         tensionGauche: formConst.tensionGauche || undefined,
         tensionDroite: formConst.tensionDroite || undefined,
         poids: formConst.poids ? Number(formConst.poids) : undefined,
+        perimetreBrachial: formConst.perimetreBrachial || undefined,
+        perimetreCranien: formConst.perimetreCranien || undefined,
       })
       Alert.alert('✅ Constantes enregistrées', `Passage ${constanteCible.numeroOrdre}`)
       setConstanteCible(null)
@@ -1002,6 +1008,26 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                       setFormConst({ ...formConst, poids: t })
                     }
                     keyboardType="numeric"
+                  />
+                </View>
+              </View>
+              <View style={styles.ligne}>
+                <View style={styles.ligneItem}>
+                  <Input
+                    label="Périm. brachial (cm)"
+                    value={formConst.perimetreBrachial}
+                    onChangeText={(t) =>
+                      setFormConst({ ...formConst, perimetreBrachial: t })
+                    }
+                  />
+                </View>
+                <View style={styles.ligneItem}>
+                  <Input
+                    label="Périm. crânien (cm)"
+                    value={formConst.perimetreCranien}
+                    onChangeText={(t) =>
+                      setFormConst({ ...formConst, perimetreCranien: t })
+                    }
                   />
                 </View>
               </View>

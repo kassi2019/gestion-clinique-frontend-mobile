@@ -36,8 +36,10 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
   const [crForm, setCrForm] = useState({ indication: '', technique: '', resultat: '', conclusion: '' })
   const [enCours, setEnCours] = useState(false)
 
-  // ── Historique ──
-  const [onglet, setOnglet] = useState<'en_cours' | 'historique'>('en_cours')
+  // ── File d'attente (par ordre d'arrivée) + Historique ──
+  const [onglet, setOnglet] = useState<'file' | 'en_cours' | 'historique'>('file')
+  const [fileListe, setFileListe] = useState<any[]>([])
+  const [fileChargement, setFileChargement] = useState(false)
   const [histoJour, setHistoJour] = useState('')
   const [histoRecherche, setHistoRecherche] = useState('')
   const [histoListe, setHistoListe] = useState<any[]>([])
@@ -45,6 +47,23 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
   const [histoTotalPages, setHistoTotalPages] = useState(1)
   const [histoChargement, setHistoChargement] = useState(false)
   const [apercu, setApercu] = useState<string | null>(null)
+
+  async function chargerFile() {
+    setFileChargement(true)
+    try {
+      const { data } = await http.get('/imagerie/file', { params: { cliniqueId } })
+      setFileListe(data ?? [])
+    } catch {
+      setFileListe([])
+    } finally {
+      setFileChargement(false)
+    }
+  }
+
+  useEffect(() => {
+    if (onglet === 'file' && !passage) chargerFile()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onglet, passage])
 
   async function chargerHistorique(p = 1) {
     setHistoChargement(true)
@@ -221,11 +240,37 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
             actif={onglet}
             onChange={(k) => setOnglet(k as typeof onglet)}
             tabs={[
-              { key: 'en_cours', label: 'En cours' },
+              { key: 'file', label: 'File d\'attente', count: fileListe.length },
+              { key: 'en_cours', label: 'Recherche' },
               { key: 'historique', label: 'Historique' },
             ]}
           />
-          {onglet === 'en_cours' ? (
+          {onglet === 'file' ? (
+            <>
+              {fileChargement ? <Text style={styles.vide}>Chargement…</Text> : null}
+              {!fileChargement && fileListe.length === 0 ? (
+                <Text style={styles.vide}>Aucun patient en attente d'examen.</Text>
+              ) : null}
+              {fileListe.map((p: any, i: number) => (
+                <View key={p.id} style={styles.item}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemTitre}>
+                      {i + 1}. {p.patient?.nom} {p.patient?.prenom}
+                    </Text>
+                    <Text style={styles.itemSous}>
+                      {p.numeroOrdre} · {p.nbExamens} examen(s) ·{' '}
+                      {p.createdAt ? new Date(p.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : ''}
+                    </Text>
+                  </View>
+                  <Btn
+                    title="🩻 Traitement"
+                    small
+                    onPress={() => choisirPassage(p as any)}
+                  />
+                </View>
+              ))}
+            </>
+          ) : onglet === 'en_cours' ? (
             <>
               {resultats.map((r) => (
                 <TouchableOpacity key={r.id} style={styles.item} onPress={() => choisirPassage(r)}>

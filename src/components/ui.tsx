@@ -19,8 +19,19 @@ export function Input({
   label,
   required,
   children,
+  onChangeText,
+  autoCapitalize = 'characters',
+  secureTextEntry,
+  keyboardType,
   ...props
 }: TextInputProps & { label?: string; required?: boolean; children?: React.ReactNode }) {
+  // Calibrage global : saisie en MAJUSCULES sur tous les formulaires.
+  // Exclusions : mots de passe et claviers numériques/téléphone/e-mail.
+  const CLAVIERS_BRUTS = ['numeric', 'number-pad', 'decimal-pad', 'phone-pad', 'email-address']
+  const brut = secureTextEntry || (keyboardType && CLAVIERS_BRUTS.includes(keyboardType))
+  const handleChange = (t: string) => {
+    onChangeText?.(brut ? t : t.toUpperCase())
+  }
   return (
     <View style={styles.inputWrap}>
       {label ? (
@@ -33,6 +44,10 @@ export function Input({
         <TextInput
           placeholderTextColor="#94a3b8"
           style={styles.input}
+          onChangeText={handleChange}
+          autoCapitalize={brut ? 'none' : autoCapitalize}
+          secureTextEntry={secureTextEntry}
+          keyboardType={keyboardType}
           {...props}
         />
       )}
@@ -221,7 +236,8 @@ export function PaginationBar({
   )
 }
 
-/** Modale bottom-sheet générique (titre + fermeture + contenu scrollable + actions). */
+/** Modale bottom-sheet générique (titre + fermeture + contenu scrollable + actions).
+ *  `centree` : la carte s'affiche au CENTRE de l'écran (formulaires courts). */
 export function Modale({
   visible,
   titre,
@@ -229,6 +245,7 @@ export function Modale({
   onFermer,
   children,
   actions,
+  centree = false,
 }: {
   visible: boolean
   titre?: string
@@ -236,11 +253,12 @@ export function Modale({
   onFermer: () => void
   children: React.ReactNode
   actions?: React.ReactNode
+  centree?: boolean
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onFermer}>
-      <View style={styles.modalVoile}>
-        <View style={styles.modalCarte}>
+      <View style={[styles.modalVoile, centree && styles.modalVoileCentree]}>
+        <View style={[styles.modalCarte, centree && styles.modalCarteCentree]}>
           <View style={styles.modalEntete}>
             <View style={{ flex: 1 }}>
               {titre ? <Text style={styles.modalTitre}>{titre}</Text> : null}
@@ -402,6 +420,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15,23,42,0.55)',
     justifyContent: 'flex-end',
   },
+  modalVoileCentree: { justifyContent: 'center', padding: 20 },
+  modalCarteCentree: { borderRadius: 18 },
   modalCarte: {
     backgroundColor: colors.surface,
     borderTopLeftRadius: 18,

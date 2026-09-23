@@ -12,7 +12,7 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Screen, SectionTitle } from '../components/ui'
+import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Screen, SectionTitle } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 
 type PassageRef = {
@@ -63,6 +63,44 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   const [medForm, setMedForm] = useState({ medicamentId: null as number | null, nom: '', posologie: '', quantite: '', duree: '' })
   const [medEnCours, setMedEnCours] = useState(false)
 
+  // ── Prescription intégrée à la fiche (en plus de l'onglet Médicaments) ──
+  const [ficheMedId, setFicheMedId] = useState<number | null>(null)
+  const [ficheMedNom, setFicheMedNom] = useState('')
+  const [ficheMedPoso, setFicheMedPoso] = useState('')
+  const [ficheMedQte, setFicheMedQte] = useState('')
+  const [ficheMedDuree, setFicheMedDuree] = useState('')
+  const [ficheMedEnCours, setFicheMedEnCours] = useState(false)
+
+  async function ajouterMedicamentFiche() {
+    if (!consultation) return
+    if (!ficheMedId && !ficheMedNom.trim()) {
+      Alert.alert('Médicament', 'Choisissez un médicament du catalogue ou saisissez un nom.')
+      return
+    }
+    setFicheMedEnCours(true)
+    try {
+      await http.post(`/consultations/${consultation.id}/medicaments`, {
+        medicamentId: ficheMedId ?? undefined,
+        nom: ficheMedNom.trim() || undefined,
+        posologie: ficheMedPoso || undefined,
+        quantite: ficheMedQte || undefined,
+        duree: ficheMedDuree || undefined,
+      })
+      alimenterListe('POSOLOGIE', ficheMedPoso)
+      setFicheMedId(null)
+      setFicheMedNom('')
+      setFicheMedPoso('')
+      setFicheMedQte('')
+      setFicheMedDuree('')
+      Alert.alert('✅ Médicament ajouté à la prescription')
+      await chargerDetail(passage!.id)
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Ajout impossible.')
+    } finally {
+      setFicheMedEnCours(false)
+    }
+  }
+
   // Examens
   const [nouvelExamenId, setNouvelExamenId] = useState<number | null>(null)
   const [nouvelExamenLibre, setNouvelExamenLibre] = useState('')
@@ -77,6 +115,12 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   const consultation = detail?.passage?.consultation ?? null
   const historique = detail?.historique ?? []
   const estInterne = passage?.statut !== 'EXTERNE' && detail?.passage?.typePatient !== 'EXTERNE'
+
+  // IMC calculé automatiquement à partir des constantes de l'accueil
+  // (taille en cm côté accueil → conversion en mètres).
+  const poidsKg = Number(detail?.passage?.poids)
+  const tailleCm = Number(detail?.passage?.taille)
+  const imcCalcule = poidsKg && tailleCm ? (poidsKg / Math.pow(tailleCm / 100, 2)).toFixed(1) : ''
 
   useEffect(() => {
     const q = recherche.trim()
@@ -269,6 +313,24 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     }
   }
 
+  // ── Listes paramétrées : saisie libre auto-alimentée (endpoints dédiés) ──
+  const ROUTES_LISTES: Record<string, string> = {
+    DIAGNOSTIC: '/diagnostics',
+    PATHOLOGIE: '/pathologies',
+    NATIONALITE: '/nationalites',
+    RESIDENCE: '/residences',
+    POSOLOGIE: '/posologies',
+  }
+
+  async function alimenterListe(code: string, libelle?: string) {
+    if (!libelle?.trim() || !ROUTES_LISTES[code]) return
+    try {
+      await http.post(ROUTES_LISTES[code], { cliniqueId, libelle: libelle.trim() })
+    } catch {
+      /* facultatif */
+    }
+  }
+
   // ── Fiche ──
   async function enregistrerFiche() {
     if (!passage) return
@@ -293,7 +355,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         pathologiesAssociees: vider(fiche.pathologiesAssociees),
         typeSuivi: vider(fiche.typeSuivi),
         consultantType: vider(fiche.consultantType),
-        imc: vider(fiche.imc),
+        imc: imcCalcule || undefined,
         zscore: vider(fiche.zscore),
         frequenceRespiratoire: vider(fiche.frequenceRespiratoire),
         perimetreBrachial: vider(fiche.perimetreBrachial),
@@ -335,6 +397,11 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       }
       await http.post(`/consultations/passages/${passage.id}`, payload)
       Alert.alert('✅ Fiche enregistrée')
+      // Saisie libre auto-alimentée : enrichit les listes paramétrées
+      alimenterListe('DIAGNOSTIC', fiche.diagnostic)
+      alimenterListe('PATHOLOGIE', fiche.pathologiesAssociees)
+      alimenterListe('NATIONALITE', fiche.nationalite)
+      alimenterListe('RESIDENCE', fiche.residenceActuelle)
       await chargerDetail(passage.id)
     } catch (e: any) {
       const msg = e.response?.data?.message
@@ -392,6 +459,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         duree: medForm.duree || undefined,
       })
       Alert.alert('✅ Médicament prescrit')
+      alimenterListe('POSOLOGIE', medForm.posologie)
       setMedForm({ medicamentId: null, nom: '', posologie: '', quantite: '', duree: '' })
       setModaleMed(false)
       await chargerDetail(passage!.id)
@@ -435,6 +503,23 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     const labo = (detail?.passage?.examensLabo ?? []).find((e: any) => e.passagePrestationId === l.id)
     const ima = (detail?.passage?.examensImagerie ?? []).find((e: any) => e.passagePrestationId === l.id)
     return labo?.statut === 'VALIDE' || ima?.statut === 'VALIDE'
+  }
+
+  // ── Résultats des examens (visibles par le médecin) ──
+  const [resultatVisible, setResultatVisible] = useState(false)
+  const [resultatCourant, setResultatCourant] = useState<{ type: 'LABO' | 'IMAGERIE'; exam: any } | null>(null)
+
+  /** Retourne l'examen réalisé (avec résultats) pour une ligne de prestation. */
+  function resultatExamen(l: any): { type: 'LABO' | 'IMAGERIE'; exam: any } | null {
+    const labo = (detail?.passage?.examensLabo ?? []).find((e: any) => e.passagePrestationId === l.id)
+    if (labo && (labo.statut === 'VALIDE' || labo.statut === 'RESULTATS')) {
+      return { type: 'LABO', exam: labo }
+    }
+    const ima = (detail?.passage?.examensImagerie ?? []).find((e: any) => e.passagePrestationId === l.id)
+    if (ima && (ima.statut === 'VALIDE' || ima.statut === 'RESULTATS')) {
+      return { type: 'IMAGERIE', exam: ima }
+    }
+    return null
   }
 
   async function ajouterExamen() {
@@ -706,7 +791,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     label="TA gauche / droite"
                     value={`${detail?.passage?.tensionGauche ?? '—'} · ${detail?.passage?.tensionDroite ?? '—'}`}
                   />
-                  <Input label="IMC" value={fiche.imc ?? ''} onChangeText={(t) => setFiche({ ...fiche, imc: t })} keyboardType="numeric" />
+                  <Input label="IMC (calculé automatiquement)" value={imcCalcule} editable={false} keyboardType="numeric" />
                   <Input label="Z-score" value={fiche.zscore ?? ''} onChangeText={(t) => setFiche({ ...fiche, zscore: t })} />
                   <Input label="Fréquence respiratoire" value={fiche.frequenceRespiratoire ?? ''} onChangeText={(t) => setFiche({ ...fiche, frequenceRespiratoire: t })} keyboardType="numeric" />
                   <View style={styles.ligne}>
@@ -821,7 +906,51 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                       </Text>
                     </>
                   ) : null}
-                  <Input label="Conduite à tenir / traitement" value={fiche.conduiteTenir ?? ''} onChangeText={(t) => setFiche({ ...fiche, conduiteTenir: t })} multiline />
+                  {/* Prescription de médicaments intégrée à la fiche (§ cahier des charges) */}
+                  {(consultation?.medicaments ?? []).map((p: any) => (
+                    <View key={p.id} style={styles.ligneMed}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.medNom}>{p.medicamentNom}</Text>
+                        <Text style={styles.medDetail}>
+                          {[p.posologie, p.quantite, p.duree].filter(Boolean).join(' · ') || '—'}
+                        </Text>
+                      </View>
+                      <Btn title="✕" small variant="danger" onPress={() => retirerMedicament(p.id)} />
+                    </View>
+                  ))}
+
+                  {/* Formulaire de prescription intégré à la fiche */}
+                  <Input label="Médicament (catalogue)">
+                    <ListeSelect
+                      value={ficheMedId}
+                      options={optionsMedicaments}
+                      placeholder="— Choisir —"
+                      onChange={(v) => setFicheMedId(v as number | null)}
+                    />
+                  </Input>
+                  <Input
+                    label="Ou saisir librement le nom"
+                    value={ficheMedNom}
+                    onChangeText={setFicheMedNom}
+                    placeholder="Nom du médicament"
+                  />
+                  <View style={styles.ligne}>
+                    <View style={styles.ligneItem}>
+                      <Input label="Posologie" value={ficheMedPoso} onChangeText={setFicheMedPoso} placeholder="Ex : 1 cp 3x/j" />
+                    </View>
+                    <View style={styles.ligneItem}>
+                      <Input label="Quantité" value={ficheMedQte} onChangeText={setFicheMedQte} placeholder="Ex : 2 boîtes" />
+                    </View>
+                    <View style={styles.ligneItem}>
+                      <Input label="Durée" value={ficheMedDuree} onChangeText={setFicheMedDuree} placeholder="Ex : 5 j" />
+                    </View>
+                  </View>
+                  <Btn
+                    title="＋ Ajouter à la prescription"
+                    small
+                    onPress={ajouterMedicamentFiche}
+                    loading={ficheMedEnCours}
+                  />
                 </Card>
                 <Card>
                   <SectionTitle>Issue de la consultation</SectionTitle>
@@ -962,6 +1091,17 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                         tone={estFait(l) ? 'success' : 'danger'}
                       />
                     </View>
+                    {resultatExamen(l) ? (
+                      <Btn
+                        title="📋 Résultat"
+                        small
+                        variant="outline"
+                        onPress={() => {
+                          setResultatCourant(resultatExamen(l))
+                          setResultatVisible(true)
+                        }}
+                      />
+                    ) : null}
                     {l.statut === 'NON_PRESCRITE' && consultation ? (
                       <Btn title="✍️ Prescrire" small variant="outline" onPress={() => prescrireExamen(l)} />
                     ) : null}
@@ -1006,6 +1146,47 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           </View>
         </View>
       ) : null}
+
+      {/* Modale : résultat d'examen (labo / imagerie) */}
+      <Modale
+        visible={resultatVisible}
+        titre={`📋 Résultat — ${resultatCourant?.exam.libelle ?? ''}`}
+        onFermer={() => setResultatVisible(false)}
+        actions={<Btn title="Fermer" variant="outline" onPress={() => setResultatVisible(false)} />}
+      >
+        {resultatCourant?.type === 'LABO' ? (
+          <>
+            {(resultatCourant.exam.lignes ?? []).map((lg: any, i: number) => (
+              <View key={i} style={styles.item}>
+                <Text style={styles.itemTitre}>
+                  {lg.parametre ?? '—'} : <Text style={{ fontWeight: '800' }}>{lg.valeur ?? '—'}</Text>{' '}
+                  {lg.unite ?? ''}
+                </Text>
+                <Text style={styles.itemSous}>Normes : {lg.normes ?? '—'}</Text>
+              </View>
+            ))}
+            <Text style={styles.note}>
+              <Text style={{ fontWeight: '800' }}>Conclusion : </Text>
+              {resultatCourant.exam.conclusion ?? '—'}
+            </Text>
+          </>
+        ) : (
+          <>
+            <InfoLigne label="Indication" value={resultatCourant?.exam.indication ?? '—'} />
+            <InfoLigne label="Technique" value={resultatCourant?.exam.technique ?? '—'} />
+            <InfoLigne label="Résultat" value={resultatCourant?.exam.resultat ?? '—'} />
+            <InfoLigne label="Conclusion" value={resultatCourant?.exam.conclusion ?? '—'} />
+          </>
+        )}
+        {resultatCourant?.exam.valideLe ? (
+          <Text style={styles.note}>
+            Validé le {new Date(resultatCourant.exam.valideLe).toLocaleString('fr-FR')}
+            {resultatCourant.exam.validePar?.personnel
+              ? ` par ${resultatCourant.exam.validePar.personnel.prenom ?? ''} ${resultatCourant.exam.validePar.personnel.nom ?? ''}`
+              : ''}
+          </Text>
+        ) : null}
+      </Modale>
     </Screen>
   )
 }

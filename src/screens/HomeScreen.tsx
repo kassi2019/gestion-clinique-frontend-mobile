@@ -147,10 +147,11 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
         </View>
       </ScrollView>
 
-      {/* Modale : changer son mot de passe */}
+      {/* Modale : changer son mot de passe (centrée) */}
       <Modale
         visible={mdpVisible}
         titre="🔑 Changer le mot de passe"
+        centree
         onFermer={() => setMdpVisible(false)}
         actions={
           <>

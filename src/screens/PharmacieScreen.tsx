@@ -267,8 +267,11 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
   }
 
   const total = (ordonnance?.prescriptions ?? []).reduce(
-    (s: number, p: any) =>
-      s + (p.medicament?.prixVente ? Number(p.medicament.prixVente) * (Number(quantites[p.id]) || 0) : 0),
+    (s: number, p: any) => {
+      // Les consommables ne sont pas facturés (montant = 0, comme le backend)
+      if (p.medicament?.consommable) return s
+      return s + (p.medicament?.prixVente ? Number(p.medicament.prixVente) * (Number(quantites[p.id]) || 0) : 0)
+    },
     0,
   )
 
@@ -486,7 +489,9 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
                   {p.medicament ? (
                     <Text style={styles.medDetail}>
                       Stock : {p.medicament.stock} {p.medicament.uniteVente === 'PLAQUE' ? 'plaques' : 'boîtes'} ·{' '}
-                      {Number(p.medicament.prixVente ?? 0).toLocaleString('fr-FR')} F/{p.medicament.uniteVente === 'PLAQUE' ? 'plaque' : 'boîte'}
+                      {p.medicament.consommable
+                        ? 'Consommable — non facturé'
+                        : `${Number(p.medicament.prixVente ?? 0).toLocaleString('fr-FR')} F/${p.medicament.uniteVente === 'PLAQUE' ? 'plaque' : 'boîte'}`}
                     </Text>
                   ) : (
                     <Badge label="Hors catalogue" tone="warning" />
