@@ -106,19 +106,22 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
             <Text style={styles.avatarTexte}>{initiales}</Text>
           </View>
           <View style={styles.headerInfos}>
-            <Text style={styles.salutation}>
+            <Text style={styles.salutation} numberOfLines={1} ellipsizeMode="tail">
               Bonjour, {personnel?.prenom ?? ''} {personnel?.nom ?? user?.matricule}
             </Text>
-            <Text style={styles.headerRole}>
+            <Text style={styles.headerRole} numberOfLines={1} ellipsizeMode="tail">
               {user?.role?.nom ?? ''} · {user?.clinique?.nom ?? ''}
             </Text>
           </View>
-          <TouchableOpacity style={styles.btnDeconnexion} onPress={() => setMdpVisible(true)}>
-            <Text style={styles.btnDeconnexionTexte}>🔑 Mot de passe</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.btnDeconnexion} onPress={deconnexion}>
-            <Text style={styles.btnDeconnexionTexte}>Déconnexion</Text>
-          </TouchableOpacity>
+          {/* Boutons empilés verticalement : ne compriment pas le nom à l'écran */}
+          <View style={styles.headerBoutons}>
+            <TouchableOpacity style={styles.btnDeconnexion} onPress={() => setMdpVisible(true)}>
+              <Text style={styles.btnDeconnexionTexte}>🔑 MDP</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.btnDeconnexion} onPress={deconnexion}>
+              <Text style={styles.btnDeconnexionTexte}>⏻ Quitter</Text>
+            </TouchableOpacity>
+          </View>
         </View>
         <Text style={styles.dateJour}>{dateDuJour}</Text>
       </LinearGradient>
@@ -139,7 +142,7 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
                 <View style={styles.carteIcone}>
                   <Text style={styles.carteIconeTexte}>{m.icon}</Text>
                 </View>
-                <Text style={styles.carteLabel}>{m.label}</Text>
+                <Text style={styles.carteLabel} numberOfLines={2}>{m.label}</Text>
                 {!autorise ? <Text style={styles.carteCadenas}>🔒</Text> : null}
               </TouchableOpacity>
             )
@@ -202,30 +205,37 @@ const styles = StyleSheet.create({
   headerLigne: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
+    gap: 12,
   },
   avatar: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     backgroundColor: '#ffffff',
     alignItems: 'center',
     justifyContent: 'center',
     borderColor: 'rgba(255,255,255,0.6)',
     borderWidth: 2,
+    flexShrink: 0,
   },
-  avatarTexte: { fontSize: 18, fontWeight: '800', color: '#0f766e' },
-  headerInfos: { flex: 1 },
-  salutation: { color: '#ffffff', fontSize: 17, fontWeight: '800' },
-  headerRole: { color: 'rgba(236,253,245,0.85)', fontSize: 12.5, marginTop: 3 },
+  avatarTexte: { fontSize: 17, fontWeight: '800', color: '#0f766e' },
+  headerInfos: { flex: 1, minWidth: 0 },
+  salutation: { color: '#ffffff', fontSize: 16, fontWeight: '800' },
+  headerRole: { color: 'rgba(236,253,245,0.85)', fontSize: 12, marginTop: 3 },
+  headerBoutons: {
+    flexDirection: 'column',
+    gap: 6,
+    alignItems: 'flex-end',
+    flexShrink: 0,
+  },
   btnDeconnexion: {
     borderColor: 'rgba(255,255,255,0.5)',
     borderWidth: 1,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 11,
+    paddingVertical: 5,
   },
-  btnDeconnexionTexte: { color: '#fff', fontSize: 12, fontWeight: '700' },
+  btnDeconnexionTexte: { color: '#fff', fontSize: 11.5, fontWeight: '700' },
   dateJour: {
     color: 'rgba(236,253,245,0.85)',
     fontSize: 12.5,
@@ -276,7 +286,7 @@ const styles = StyleSheet.create({
   },
   carteIconeTexte: { fontSize: 26 },
   carteLabel: {
-    fontSize: 11.5,
+    fontSize: 11,
     fontWeight: '700',
     color: colors.primaryDarker,
     textAlign: 'center',

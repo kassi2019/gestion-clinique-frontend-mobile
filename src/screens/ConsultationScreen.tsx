@@ -934,10 +934,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     onChangeText={setFicheMedNom}
                     placeholder="Nom du médicament"
                   />
+                  <Input label="Posologie" value={ficheMedPoso} onChangeText={setFicheMedPoso} placeholder="Ex : 1 cp 3x/j" />
                   <View style={styles.ligne}>
-                    <View style={styles.ligneItem}>
-                      <Input label="Posologie" value={ficheMedPoso} onChangeText={setFicheMedPoso} placeholder="Ex : 1 cp 3x/j" />
-                    </View>
                     <View style={styles.ligneItem}>
                       <Input label="Quantité" value={ficheMedQte} onChangeText={setFicheMedQte} placeholder="Ex : 2 boîtes" />
                     </View>
@@ -1263,6 +1261,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    flexWrap: 'wrap',
     borderBottomColor: colors.border,
     borderBottomWidth: 1,
     paddingVertical: 10,

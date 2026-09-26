@@ -392,10 +392,10 @@ export default function LaboratoireScreen({ navigation }: { navigation: { goBack
             <ScrollView style={{ flexGrow: 0 }}>
               {lignes.map((l, i) => (
                 <View key={i} style={styles.ligneRes}>
-                  <TextInput style={[styles.champRes, { flex: 2 }]} placeholder="Paramètre" value={l.parametre} onChangeText={(t) => setLignes(lignes.map((x, j) => (j === i ? { ...x, parametre: t } : x)))} />
+                  <TextInput style={[styles.champRes, styles.champResLarge]} placeholder="Paramètre" value={l.parametre} onChangeText={(t) => setLignes(lignes.map((x, j) => (j === i ? { ...x, parametre: t } : x)))} />
                   <TextInput style={styles.champRes} placeholder="Résultat" value={l.valeur} onChangeText={(t) => setLignes(lignes.map((x, j) => (j === i ? { ...x, valeur: t } : x)))} />
                   <TextInput style={styles.champRes} placeholder="Unité" value={l.unite} onChangeText={(t) => setLignes(lignes.map((x, j) => (j === i ? { ...x, unite: t } : x)))} />
-                  <TextInput style={[styles.champRes, { flex: 1.5 }]} placeholder="Normes" value={l.normes} onChangeText={(t) => setLignes(lignes.map((x, j) => (j === i ? { ...x, normes: t } : x)))} />
+                  <TextInput style={[styles.champRes, styles.champResLarge]} placeholder="Normes" value={l.normes} onChangeText={(t) => setLignes(lignes.map((x, j) => (j === i ? { ...x, normes: t } : x)))} />
                 </View>
               ))}
               <Btn title="＋ Ajouter une ligne" variant="outline" small onPress={() => setLignes([...lignes, { parametre: '', valeur: '', unite: '', normes: '' }])} />
@@ -448,6 +448,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    flexWrap: 'wrap',
     borderBottomColor: colors.border,
     borderBottomWidth: 1,
     paddingVertical: 10,
@@ -476,7 +477,8 @@ const styles = StyleSheet.create({
     maxHeight: '92%',
   },
   modalTitre: { fontSize: 17, fontWeight: '800', color: colors.primaryDarker, marginBottom: 12 },
-  ligneRes: { flexDirection: 'row', gap: 6, marginBottom: 6 },
+  ligneRes: { flexDirection: 'row', gap: 6, marginBottom: 6, flexWrap: 'wrap' },
+  champResLarge: { flexBasis: '47%', flexGrow: 1 },
   champRes: {
     flex: 1,
     borderColor: colors.borderChamp,

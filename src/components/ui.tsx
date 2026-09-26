@@ -1,7 +1,9 @@
 import React from 'react'
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -13,6 +15,9 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors, radius } from '../theme'
+
+/** Comportement clavier : padding iOS, height Android (edge-to-edge). */
+const KAV_BEHAVIOR = Platform.OS === 'ios' ? ('padding' as const) : ('height' as const)
 
 /** Champ de saisie avec libellé (ou conteneur pour un sélecteur personnalisé). */
 export function Input({
@@ -79,7 +84,7 @@ export function Btn({
       {loading ? (
         <ActivityIndicator size="small" color={variant === 'outline' ? colors.primary : '#fff'} />
       ) : (
-        <Text style={[styles.btnText, styles[`btnText_${variant}`], disabled && styles.btnTextDisabled]}>
+        <Text style={[styles.btnText, styles[`btnText_${variant}`], disabled && styles.btnTextDisabled]} numberOfLines={1}>
           {title}
         </Text>
       )}
@@ -91,7 +96,9 @@ export function Btn({
 export function Badge({ label, tone = 'muted' }: { label: string; tone?: 'success' | 'warning' | 'danger' | 'muted' }) {
   return (
     <View style={[styles.badge, styles[`badge_${tone}`]]}>
-      <Text style={[styles.badgeText, styles[`badgeText_${tone}`]]}>{label}</Text>
+      <Text style={[styles.badgeText, styles[`badgeText_${tone}`]]} numberOfLines={1}>
+        {label}
+      </Text>
     </View>
   )
 }
@@ -105,16 +112,19 @@ export function Card({ children, style }: { children: React.ReactNode; style?: o
 export function Screen({ children, padded = true }: { children: React.ReactNode; padded?: boolean }) {
   const insets = useSafeAreaInsets()
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={[
-        padded && styles.screenPadded,
-        { paddingTop: (padded ? 16 : 0) + insets.top + 10 },
-      ]}
-      keyboardShouldPersistTaps="handled"
-    >
-      {children}
-    </ScrollView>
+    <KeyboardAvoidingView style={styles.kav} behavior={KAV_BEHAVIOR}>
+      <ScrollView
+        style={styles.screen}
+        contentContainerStyle={[
+          padded && styles.screenPadded,
+          { paddingTop: (padded ? 16 : 0) + insets.top + 10 },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+      >
+        {children}
+      </ScrollView>
+    </KeyboardAvoidingView>
   )
 }
 
@@ -175,7 +185,12 @@ export function Onglets({
           style={[styles.onglet, actif === t.key && styles.ongletActif]}
           onPress={() => onChange(t.key)}
         >
-          <Text style={[styles.ongletTexte, actif === t.key && styles.ongletTexteActif]}>{t.label}</Text>
+          <Text
+            style={[styles.ongletTexte, actif === t.key && styles.ongletTexteActif]}
+            numberOfLines={1}
+          >
+            {t.label}
+          </Text>
           {t.count != null ? (
             <View style={[styles.ongletCount, actif === t.key && styles.ongletCountActif]}>
               <Text style={[styles.ongletCountTexte, actif === t.key && styles.ongletCountTexteActif]}>
@@ -257,28 +272,31 @@ export function Modale({
 }) {
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onFermer}>
-      <View style={[styles.modalVoile, centree && styles.modalVoileCentree]}>
-        <View style={[styles.modalCarte, centree && styles.modalCarteCentree]}>
-          <View style={styles.modalEntete}>
-            <View style={{ flex: 1 }}>
-              {titre ? <Text style={styles.modalTitre}>{titre}</Text> : null}
-              {sousTitre ? <Text style={styles.modalSousTitre}>{sousTitre}</Text> : null}
+      <KeyboardAvoidingView style={styles.kav} behavior={KAV_BEHAVIOR}>
+        <View style={[styles.modalVoile, centree && styles.modalVoileCentree]}>
+          <View style={[styles.modalCarte, centree && styles.modalCarteCentree]}>
+            <View style={styles.modalEntete}>
+              <View style={{ flex: 1 }}>
+                {titre ? <Text style={styles.modalTitre}>{titre}</Text> : null}
+                {sousTitre ? <Text style={styles.modalSousTitre}>{sousTitre}</Text> : null}
+              </View>
+              <TouchableOpacity onPress={onFermer} style={styles.modalFermer}>
+                <Text style={styles.modalFermerTexte}>✕</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={onFermer} style={styles.modalFermer}>
-              <Text style={styles.modalFermerTexte}>✕</Text>
-            </TouchableOpacity>
+            <ScrollView keyboardShouldPersistTaps="handled" style={styles.modalScroll}>
+              {children}
+            </ScrollView>
+            {actions ? <View style={styles.modalActions}>{actions}</View> : null}
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled" style={styles.modalScroll}>
-            {children}
-          </ScrollView>
-          {actions ? <View style={styles.modalActions}>{actions}</View> : null}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   )
 }
 
 const styles = StyleSheet.create({
+  kav: { flex: 1 },
   screen: { flex: 1, backgroundColor: colors.bg },
   screenPadded: { padding: 16, paddingBottom: 40 },
   inputWrap: { marginBottom: 12 },
@@ -306,7 +324,7 @@ const styles = StyleSheet.create({
   btn_outline: { backgroundColor: 'transparent', borderColor: colors.primary, borderWidth: 1 },
   btn_danger: { backgroundColor: colors.danger },
   btnDisabled: { opacity: 0.5 },
-  btnText: { fontSize: 15, fontWeight: '700' },
+  btnText: { fontSize: 15, fontWeight: '700', flexShrink: 1 },
   btnText_primary: { color: '#fff' },
   btnText_outline: { color: colors.primary },
   btnText_danger: { color: '#fff' },
@@ -384,7 +402,7 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
   },
   ongletActif: { borderBottomColor: colors.primary },
-  ongletTexte: { fontSize: 13, fontWeight: '700', color: '#5f857f' },
+  ongletTexte: { fontSize: 12.5, fontWeight: '700', color: '#5f857f', flexShrink: 1 },
   ongletTexteActif: { color: colors.primaryDark },
   ongletCount: {
     backgroundColor: colors.border,

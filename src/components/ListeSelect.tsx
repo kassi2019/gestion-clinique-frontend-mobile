@@ -1,7 +1,9 @@
 import React, { useMemo, useState } from 'react'
 import {
   FlatList,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -58,13 +60,21 @@ export default function ListeSelect({
         }}
         disabled={disabled}
       >
-        <Text style={choisie ? styles.valeur : styles.placeholder}>
+        <Text
+          style={choisie ? styles.valeur : styles.placeholder}
+          numberOfLines={1}
+          ellipsizeMode="tail"
+        >
           {choisie ? choisie.label : placeholder}
         </Text>
         <Text style={styles.fleche}>▾</Text>
       </Pressable>
 
       <Modal visible={ouvert} transparent animationType="slide" onRequestClose={() => setOuvert(false)}>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
         <View style={styles.voile}>
           <View style={styles.fenetre}>
             <TextInput
@@ -97,6 +107,7 @@ export default function ListeSelect({
             </Pressable>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   )
@@ -115,8 +126,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   disabled: { opacity: 0.5 },
-  valeur: { fontSize: 15, color: colors.text },
-  placeholder: { fontSize: 15, color: '#94a3b8' },
+  valeur: { fontSize: 15, color: colors.text, flex: 1 },
+  placeholder: { fontSize: 15, color: '#94a3b8', flex: 1 },
   fleche: { fontSize: 14, color: colors.textMuted },
   voile: {
     flex: 1,

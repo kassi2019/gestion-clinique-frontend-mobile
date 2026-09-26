@@ -103,7 +103,7 @@ export default function LoginScreen() {
           )}
 
           <Text style={styles.titre}>Bienvenue</Text>
-          <Text style={styles.nomClinique}>{cliniqueNom || 'Gestion Clinique'}</Text>
+          <Text style={styles.nomClinique} numberOfLines={2} ellipsizeMode="tail">{cliniqueNom || 'Gestion Clinique'}</Text>
           <Text style={styles.sousTitre}>Connectez-vous avec votre matricule</Text>
 
           <Text style={styles.label}>Matricule</Text>

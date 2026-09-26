@@ -26,6 +26,8 @@ import {
   SectionTitle,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
+import ListeCombo from '../components/ListeCombo'
+import DateField from '../components/DateField'
 
 type Patient = { id: number; nom: string; prenom: string; code: string; age?: string; sexe?: string }
 type Service = { id: number; nom: string }
@@ -38,6 +40,9 @@ type PassageJour = {
     nom: string
     prenom: string
     age?: string
+    dateNaissance?: string
+    numeroCni?: string
+    numeroCmu?: string
     sexe?: string
     telephone?: string
     ville?: string
@@ -93,11 +98,81 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   const [nom, setNom] = useState('')
   const [prenom, setPrenom] = useState('')
   const [age, setAge] = useState('')
+  const [dateNaissance, setDateNaissance] = useState('')
+  const [cni, setCni] = useState('')
+  const [cmu, setCmu] = useState('')
+
+  // ── Calcul automatique âge ⇄ date de naissance ──
+  function ageDepuisNaissance(d: string): string {
+    if (!d) return ''
+    const date = new Date(d)
+    if (isNaN(date.getTime())) return ''
+    const now = new Date()
+    let a = now.getFullYear() - date.getFullYear()
+    const m = now.getMonth() - date.getMonth()
+    if (m < 0 || (m === 0 && now.getDate() < date.getDate())) a--
+    return a >= 0 && a <= 150 ? String(a) : ''
+  }
+
+  function naissanceDepuisAge(a: string): string {
+    const n = parseInt(a, 10)
+    if (isNaN(n) || n < 0 || n > 150) return ''
+    const d = new Date()
+    d.setFullYear(d.getFullYear() - n)
+    return d.toISOString().slice(0, 10)
+  }
+
+  /** Âge saisi → date de naissance renseignée automatiquement (et inversement). */
+  function changerAge(v: string) {
+    setAge(v)
+    if (v && !dateNaissance) setDateNaissance(naissanceDepuisAge(v))
+  }
+
+  function changerDateNaissance(v: string) {
+    setDateNaissance(v)
+    const a = ageDepuisNaissance(v)
+    if (a) setAge(a)
+  }
+
+  // ── N° CNI / N° CMU uniques : si le patient existe, il s'affiche automatiquement ──
+  let identifiantTimer: ReturnType<typeof setTimeout> | null = null
+
+  function verifierIdentifiant(v: string) {
+    const t = v.trim()
+    if (identifiantTimer) clearTimeout(identifiantTimer)
+    if (modePatient !== 'nouveau' || t.length < 3) return
+    identifiantTimer = setTimeout(async () => {
+      try {
+        const { data } = await http.get('/accueil/patients', {
+          params: { search: t, cliniqueId },
+        })
+        const exact = (data ?? []).find(
+          (p: any) => p.numeroCni === t || p.numeroCmu === t,
+        )
+        if (exact) {
+          utiliserPatientExistant(exact)
+        }
+      } catch {
+        /* facultatif */
+      }
+    }, 400)
+  }
+
+  function changerCni(v: string) {
+    setCni(v)
+    verifierIdentifiant(v)
+  }
+
+  function changerCmu(v: string) {
+    setCmu(v)
+    verifierIdentifiant(v)
+  }
   const [sexe, setSexe] = useState('')
   const [telephone, setTelephone] = useState('')
   const [ville, setVille] = useState('')
   const [quartier, setQuartier] = useState('')
   const [profession, setProfession] = useState('')
+  const [motif, setMotif] = useState('')
   const [serviceId, setServiceId] = useState<number | null>(null)
   const [typePatient, setTypePatient] = useState<'INTERNE' | 'EXTERNE'>('INTERNE')
   const [referent, setReferent] = useState('')
@@ -141,6 +216,9 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
     nom: '',
     prenom: '',
     age: '',
+    dateNaissance: '',
+    numeroCni: '',
+    numeroCmu: '',
     sexe: '',
     telephone: '',
     ville: '',
@@ -161,6 +239,55 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   const [constanteCible, setConstanteCible] = useState<PassageJour | null>(null)
   const [formConst, setFormConst] = useState({ taille: '', temperature: '', pouls: '', tensionGauche: '', tensionDroite: '', poids: '', perimetreBrachial: '', perimetreCranien: '' })
   const [savingConst, setSavingConst] = useState(false)
+
+  // ── Listes déroulantes (profession, résidence/ville, quartier, motif) ──
+  const [listes, setListes] = useState<{
+    profession: { value: string; label: string }[]
+    residence: { value: string; label: string }[]
+    quartier: { value: string; label: string }[]
+    motif: { value: string; label: string }[]
+  }>({ profession: [], residence: [], quartier: [], motif: [] })
+
+  async function chargerListes() {
+    try {
+      const [p, r, q, m] = await Promise.all([
+        http.get('/professions', { params: { cliniqueId } }),
+        http.get('/residences', { params: { cliniqueId } }),
+        http.get('/quartiers', { params: { cliniqueId } }),
+        http.get('/motifs', { params: { cliniqueId } }),
+      ])
+      const opts = (data: any[]) =>
+        (data ?? []).map((x) => ({ value: x.libelle, label: x.libelle }))
+      setListes({
+        profession: opts(p.data),
+        residence: opts(r.data),
+        quartier: opts(q.data),
+        motif: opts(m.data),
+      })
+    } catch {
+      /* listes vides */
+    }
+  }
+
+  /** Ajoute silencieusement un nouveau libellé à sa liste (auto-alimentation). */
+  async function ajouterListe(code: string, libelle: string) {
+    const routes: Record<string, string> = {
+      profession: '/professions',
+      residence: '/residences',
+      quartier: '/quartiers',
+      motif: '/motifs',
+    }
+    try {
+      await http.post(routes[code], { cliniqueId, libelle: libelle.trim() })
+      chargerListes()
+    } catch {
+      /* facultatif */
+    }
+  }
+
+  useEffect(() => {
+    chargerListes()
+  }, [])
 
   useEffect(() => {
     ;(async () => {
@@ -219,6 +346,37 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
     }, 300)
     return () => clearTimeout(timer)
   }, [recherchePatient, modePatient])
+
+  // ── Garde-fou anti-doublon : pendant la saisie du nom d'un nouveau patient ──
+  const [doublons, setDoublons] = useState<any[]>([])
+
+  useEffect(() => {
+    const q = nom.trim()
+    if (modePatient !== 'nouveau' || q.length < 3) {
+      setDoublons([])
+      return
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const { data } = await http.get('/accueil/patients', {
+          params: { search: q, cliniqueId },
+        })
+        setDoublons(data ?? [])
+      } catch {
+        setDoublons([])
+      }
+    }, 350)
+    return () => clearTimeout(timer)
+  }, [nom, modePatient])
+
+  /** Le patient existe déjà : on bascule sur son dossier. */
+  function utiliserPatientExistant(pt: any) {
+    setModePatient('existant')
+    setPatientChoisi(pt)
+    setRecherchePatient(pt.nom)
+    setDoublons([])
+    Alert.alert('✅ Patient existant', `${pt.nom} ${pt.prenom} (code ${pt.code}) sélectionné.`)
+  }
 
   async function chargerJour(p = 1) {
     setChargementListe(true)
@@ -302,6 +460,16 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
 
   async function enregistrerConstantes() {
     if (!constanteCible) return
+    // Tensions artérielles obligatoires, au format x/y (ex : 12/8) — comme le web
+    const RE_TA = /^\d{1,3}\/\d{1,3}$/
+    if (!RE_TA.test(formConst.tensionGauche.trim())) {
+      Alert.alert('Constantes', 'Tension artérielle gauche obligatoire : format « x/y » (ex : 12/8).')
+      return
+    }
+    if (!RE_TA.test(formConst.tensionDroite.trim())) {
+      Alert.alert('Constantes', 'Tension artérielle droite obligatoire : format « x/y » (ex : 12/8).')
+      return
+    }
     setSavingConst(true)
     try {
       await http.patch(`/accueil/passages/${constanteCible.id}`, {
@@ -350,6 +518,10 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       Alert.alert('Patient', 'Le nom du patient est obligatoire.')
       return
     }
+    if (modePatient === 'nouveau' && !profession.trim()) {
+      Alert.alert('Patient', 'La profession du patient est obligatoire.')
+      return
+    }
     if (!serviceId) {
       Alert.alert('Service', 'Choisissez le service à consulter.')
       return
@@ -364,7 +536,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         cliniqueId,
         serviceId,
         typePatient,
-        motif: undefined,
+        motif: motif.trim() || undefined,
         referent: typePatient === 'EXTERNE' ? referent || undefined : undefined,
         prestationDemandee: typePatient === 'EXTERNE' ? prestationDemandee || undefined : undefined,
         consultationPrestationId: consultationId ?? undefined,
@@ -377,6 +549,9 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           nom: nom.trim(),
           prenom: prenom.trim(),
           age: age || undefined,
+          dateNaissance: dateNaissance || undefined,
+          numeroCni: cni || undefined,
+          numeroCmu: cmu || undefined,
           sexe: sexe || undefined,
           telephone: telephone || undefined,
           ville: ville || undefined,
@@ -391,8 +566,9 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       )
       await imprimerTicket(data.id, data.numeroOrdre)
       // Réinitialiser
-      setNom(''); setPrenom(''); setAge(''); setSexe(''); setTelephone('')
-      setVille(''); setQuartier(''); setProfession('')
+      setNom(''); setPrenom(''); setAge(''); setDateNaissance(''); setCni(''); setCmu(''); setSexe(''); setTelephone('')
+      setVille(''); setQuartier(''); setProfession(''); setMotif('')
+      setDoublons([])
       setPatientChoisi(null); setRecherchePatient(''); setResultatsPatients([])
       setServiceId(null); setTypePatient('INTERNE'); setReferent(''); setPrestationDemandee('')
       setConsultationId(null); setActePrestationId(null)
@@ -488,6 +664,11 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       nom: p.patient?.nom ?? '',
       prenom: p.patient?.prenom ?? '',
       age: p.patient?.age ?? '',
+      dateNaissance: p.patient?.dateNaissance
+        ? String(p.patient.dateNaissance).slice(0, 10)
+        : '',
+      numeroCni: p.patient?.numeroCni ?? '',
+      numeroCmu: p.patient?.numeroCmu ?? '',
       sexe: p.patient?.sexe ?? '',
       telephone: p.patient?.telephone ?? '',
       ville: p.patient?.ville ?? '',
@@ -516,6 +697,9 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           nom: modifForm.nom.trim() || undefined,
           prenom: modifForm.prenom.trim() || undefined,
           age: modifForm.age || undefined,
+          dateNaissance: modifForm.dateNaissance || undefined,
+          numeroCni: modifForm.numeroCni || undefined,
+          numeroCmu: modifForm.numeroCmu || undefined,
           sexe: modifForm.sexe || undefined,
           telephone: modifForm.telephone || undefined,
           ville: modifForm.ville || undefined,
@@ -614,21 +798,20 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           <Text style={styles.btnRetourTexte}>← Modules</Text>
         </TouchableOpacity>
         <View style={styles.bandeauTitre}>
-          <View style={{ flex: 1 }}>
+          <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={styles.titre}>🏥 Accueil</Text>
-            <Text style={styles.sousTitre}>
+            <Text style={styles.sousTitre} numberOfLines={1} ellipsizeMode="tail">
               {user?.clinique?.nom ?? "Gestion Clinique"}
             </Text>
           </View>
-      
+
           {peutBasculer ? (
             <TouchableOpacity
               style={styles.btnBasculer}
               onPress={basculerPoste}
             >
-              <Text style={styles.btnBasculerTexte}>
-                ⚡ Basculer vers{" "}
-                {posteConstante ? "Enregistrement" : "Constante"}
+              <Text style={styles.btnBasculerTexte} numberOfLines={1}>
+                ⚡ {posteConstante ? "Enregistrement" : "Constante"}
               </Text>
             </TouchableOpacity>
           ) : null}
@@ -710,10 +893,10 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
             {modePatient === "existant" ? (
               <>
                 <Input
-                  label="Rechercher (code patient ou nom)"
+                  label="Rechercher (nom, code, téléphone, CNI, CMU, date de naissance)"
                   value={recherchePatient}
                   onChangeText={setRecherchePatient}
-                  placeholder="Ex : UN5Z5Y ou TRAORE"
+                  placeholder="Ex : TRAORE, 0700000000, 12/05/1990"
                 />
                 {resultatsPatients.map((pt) => (
                   <TouchableOpacity
@@ -744,7 +927,41 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
               </>
             ) : (
               <>
+                <View style={styles.ligne}>
+                  <View style={styles.ligneItem}>
+                    <Input label="N° CNI" value={cni} onChangeText={changerCni} />
+                  </View>
+                  <View style={styles.ligneItem}>
+                    <Input label="N° CMU" value={cmu} onChangeText={changerCmu} />
+                  </View>
+                </View>
                 <Input label="Nom *" value={nom} onChangeText={setNom} />
+                {doublons.length > 0 ? (
+                  <View style={styles.doublons}>
+                    <Text style={styles.doublonsTitre}>
+                      ⚠️ {doublons.length} patient(s) ressemblant(s) trouvé(s) :
+                    </Text>
+                    {doublons.map((d) => (
+                      <View key={d.id} style={styles.doublonItem}>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={styles.doublonNom} numberOfLines={1} ellipsizeMode="tail">
+                            {d.nom} {d.prenom} · code {d.code}
+                          </Text>
+                          <Text style={styles.doublonSous} numberOfLines={1} ellipsizeMode="tail">
+                            Dossier {d.numeroDossier}
+                            {d.passages?.[0] ? ` · ${d.passages[0].numeroOrdre}` : ""}
+                          </Text>
+                        </View>
+                        <Btn
+                          title="Utiliser"
+                          small
+                          variant="outline"
+                          onPress={() => utiliserPatientExistant(d)}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
                 <Input
                   label="Prénoms"
                   value={prenom}
@@ -755,39 +972,62 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                     <Input
                       label="Âge"
                       value={age}
-                      onChangeText={setAge}
+                      onChangeText={changerAge}
                       keyboardType="numeric"
                     />
                   </View>
                   <View style={styles.ligneItem}>
-                    <Input
-                      label="Sexe"
-                      value={sexe}
-                      onChangeText={setSexe}
-                      placeholder="M / F"
-                    />
+                    <Input label="Sexe">
+                      <ListeSelect
+                        value={sexe}
+                        options={[
+                          { value: "M", label: "Masculin" },
+                          { value: "F", label: "Féminin" },
+                        ]}
+                        placeholder="— Choisir —"
+                        onChange={(v) => setSexe(v as string)}
+                      />
+                    </Input>
                   </View>
                 </View>
+                <DateField
+                  label="Date de naissance"
+                  value={dateNaissance}
+                  onChange={changerDateNaissance}
+                />
                 <Input
                   label="Téléphone"
                   value={telephone}
                   onChangeText={setTelephone}
                   keyboardType="phone-pad"
                 />
-                <Input label="Ville" value={ville} onChangeText={setVille} />
+                <ListeCombo
+                  label="Ville (résidence)"
+                  value={ville}
+                  options={listes.residence}
+                  placeholder="— Choisir une ville —"
+                  onChange={setVille}
+                  ajouter={(v) => ajouterListe('residence', v)}
+                />
                 <View style={styles.ligne}>
                   <View style={styles.ligneItem}>
-                    <Input
+                    <ListeCombo
                       label="Quartier"
                       value={quartier}
-                      onChangeText={setQuartier}
+                      options={listes.quartier}
+                      placeholder="— Choisir —"
+                      onChange={setQuartier}
+                      ajouter={(v) => ajouterListe('quartier', v)}
                     />
                   </View>
                   <View style={styles.ligneItem}>
-                    <Input
-                      label="Profession"
+                    <ListeCombo
+                      label="Profession *"
                       value={profession}
-                      onChangeText={setProfession}
+                      options={listes.profession}
+                      placeholder="— Choisir —"
+                      onChange={setProfession}
+                      ajouter={(v) => ajouterListe('profession', v)}
                     />
                   </View>
                 </View>
@@ -828,6 +1068,14 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                 onChange={(v) => setTypePatient(v as "INTERNE" | "EXTERNE")}
               />
             </Input>
+            <ListeCombo
+              label="Motif de consultation"
+              value={motif}
+              options={listes.motif}
+              placeholder="— Choisir un motif —"
+              onChange={setMotif}
+              ajouter={(v) => ajouterListe('motif', v)}
+            />
             {typePatient === "EXTERNE" ? (
               <>
                 <Input
@@ -877,17 +1125,15 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
               onChangeText={setRechercheJour}
             />
           </View>
+          <Input label="Service">
+            <ListeSelect
+              value={filtreServiceJour}
+              options={services.map((s) => ({ value: s.id, label: s.nom }))}
+              placeholder="Tous les services"
+              onChange={(v) => setFiltreServiceJour(v as number | null)}
+            />
+          </Input>
           <View style={styles.ligne}>
-            <View style={styles.ligneItem}>
-              <Input label="Service">
-                <ListeSelect
-                  value={filtreServiceJour}
-                  options={services.map((s) => ({ value: s.id, label: s.nom }))}
-                  placeholder="Tous les services"
-                  onChange={(v) => setFiltreServiceJour(v as number | null)}
-                />
-              </Input>
-            </View>
             <View style={styles.ligneItem}>
               <Input
                 label="Du"
@@ -911,28 +1157,32 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
             scrollEnabled={false}
             renderItem={({ item }) => (
               <View style={styles.passageItem}>
-                <View style={{ flex: 1 }}>
+                <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={styles.passageNumero}>{item.numeroOrdre}</Text>
-                  <Text style={styles.passagePatient}>
+                  <Text style={styles.passagePatient} numberOfLines={1} ellipsizeMode="tail">
                     {item.patient.nom} {item.patient.prenom}
                   </Text>
-                  <Badge
-                    label={item.statut}
-                    tone={item.statut === "ACTIF" ? "success" : "warning"}
+                  <View style={styles.passageStatut}>
+                    <Badge
+                      label={item.statut}
+                      tone={item.statut === "ACTIF" ? "success" : "warning"}
+                    />
+                  </View>
+                </View>
+                <View style={styles.passageActions}>
+                  <Btn
+                    title="✏️ Modifier"
+                    small
+                    variant="outline"
+                    onPress={() => ouvrirModification(item)}
+                  />
+                  <Btn
+                    title="🖨️ Ticket"
+                    small
+                    variant="outline"
+                    onPress={() => imprimerTicket(item.id, item.numeroOrdre)}
                   />
                 </View>
-                <Btn
-                  title="✏️ Modifier"
-                  small
-                  variant="outline"
-                  onPress={() => ouvrirModification(item)}
-                />
-                <Btn
-                  title="🖨️ Ticket"
-                  small
-                  variant="outline"
-                  onPress={() => imprimerTicket(item.id, item.numeroOrdre)}
-                />
               </View>
             )}
             ListEmptyComponent={
@@ -1173,17 +1423,19 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         ) : (
           rattachements.map((r) => (
             <View key={r.id} style={styles.rattachementItem}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.passagePatient}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.passagePatient} numberOfLines={1} ellipsizeMode="tail">
                   {r.assurance?.libelle ?? r.assurance?.nom ?? "Assurance"} —{" "}
                   {r.formule?.libelle ?? ""}
                   {r.numeroAssure ? ` · N° ${r.numeroAssure}` : ""}
                 </Text>
+                <View style={styles.passageStatut}>
+                  <Badge
+                    label={r.statut === "ACTIF" ? "Actif" : "Inactif"}
+                    tone={r.statut === "ACTIF" ? "success" : "muted"}
+                  />
+                </View>
               </View>
-              <Badge
-                label={r.statut === "ACTIF" ? "Actif" : "Inactif"}
-                tone={r.statut === "ACTIF" ? "success" : "muted"}
-              />
               <Btn
                 title={r.statut === "ACTIF" ? "Désactiver" : "Réactiver"}
                 small
@@ -1233,6 +1485,22 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         <View style={styles.ligne}>
           <View style={styles.ligneItem}>
             <Input
+              label="N° CNI"
+              value={modifForm.numeroCni}
+              onChangeText={(t) => setModifForm({ ...modifForm, numeroCni: t })}
+            />
+          </View>
+          <View style={styles.ligneItem}>
+            <Input
+              label="N° CMU"
+              value={modifForm.numeroCmu}
+              onChangeText={(t) => setModifForm({ ...modifForm, numeroCmu: t })}
+            />
+          </View>
+        </View>
+        <View style={styles.ligne}>
+          <View style={styles.ligneItem}>
+            <Input
               label="Nom"
               value={modifForm.nom}
               onChangeText={(t) => setModifForm({ ...modifForm, nom: t })}
@@ -1251,19 +1519,37 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
             <Input
               label="Âge"
               value={modifForm.age}
-              onChangeText={(t) => setModifForm({ ...modifForm, age: t })}
+              onChangeText={(t) => {
+                setModifForm({ ...modifForm, age: t })
+                if (t && !modifForm.dateNaissance) {
+                  setModifForm({ ...modifForm, age: t, dateNaissance: naissanceDepuisAge(t) })
+                }
+              }}
               keyboardType="numeric"
             />
           </View>
           <View style={styles.ligneItem}>
-            <Input
-              label="Sexe"
-              value={modifForm.sexe}
-              onChangeText={(t) => setModifForm({ ...modifForm, sexe: t })}
-              placeholder="M / F"
-            />
+            <Input label="Sexe">
+              <ListeSelect
+                value={modifForm.sexe}
+                options={[
+                  { value: "M", label: "Masculin" },
+                  { value: "F", label: "Féminin" },
+                ]}
+                placeholder="— Choisir —"
+                onChange={(v) => setModifForm({ ...modifForm, sexe: v as string })}
+              />
+            </Input>
           </View>
         </View>
+        <DateField
+          label="Date de naissance"
+          value={modifForm.dateNaissance}
+          onChange={(t) => {
+            const a = ageDepuisNaissance(t)
+            setModifForm({ ...modifForm, dateNaissance: t, ...(a ? { age: a } : {}) })
+          }}
+        />
         <View style={styles.ligne}>
           <View style={styles.ligneItem}>
             <Input
@@ -1274,28 +1560,35 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
             />
           </View>
           <View style={styles.ligneItem}>
-            <Input
-              label="Ville"
+            <ListeCombo
+              label="Ville (résidence)"
               value={modifForm.ville}
-              onChangeText={(t) => setModifForm({ ...modifForm, ville: t })}
+              options={listes.residence}
+              placeholder="— Choisir —"
+              onChange={(v) => setModifForm({ ...modifForm, ville: v })}
+              ajouter={(v) => ajouterListe('residence', v)}
             />
           </View>
         </View>
         <View style={styles.ligne}>
           <View style={styles.ligneItem}>
-            <Input
+            <ListeCombo
               label="Quartier"
               value={modifForm.quartier}
-              onChangeText={(t) => setModifForm({ ...modifForm, quartier: t })}
+              options={listes.quartier}
+              placeholder="— Choisir —"
+              onChange={(v) => setModifForm({ ...modifForm, quartier: v })}
+              ajouter={(v) => ajouterListe('quartier', v)}
             />
           </View>
           <View style={styles.ligneItem}>
-            <Input
-              label="Profession"
+            <ListeCombo
+              label="Profession *"
               value={modifForm.profession}
-              onChangeText={(t) =>
-                setModifForm({ ...modifForm, profession: t })
-              }
+              options={listes.profession}
+              placeholder="— Choisir —"
+              onChange={(v) => setModifForm({ ...modifForm, profession: v })}
+              ajouter={(v) => ajouterListe('profession', v)}
             />
           </View>
         </View>
@@ -1341,10 +1634,13 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
             />
           </>
         ) : null}
-        <Input
+        <ListeCombo
           label="Motif"
           value={modifForm.motif}
-          onChangeText={(t) => setModifForm({ ...modifForm, motif: t })}
+          options={listes.motif}
+          placeholder="— Choisir un motif —"
+          onChange={(v) => setModifForm({ ...modifForm, motif: v })}
+          ajouter={(v) => ajouterListe('motif', v)}
         />
       </Modale>
     </Screen>
@@ -1393,7 +1689,7 @@ const styles = StyleSheet.create({
   ongletActif: { backgroundColor: colors.primary },
   ongletTexte: { fontWeight: '700', color: colors.textMuted, fontSize: 13.5 },
   ongletTexteActif: { color: '#fff' },
-  chips: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  chips: { flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' },
   chip: {
     borderColor: colors.borderChamp,
     borderWidth: 1,
@@ -1439,6 +1735,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     paddingVertical: 10,
   },
+  passageStatut: { marginTop: 5, alignSelf: 'flex-start' },
+  passageActions: {
+    flexDirection: 'column',
+    gap: 6,
+    alignItems: 'stretch',
+    flexShrink: 0,
+  },
   passageItem: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1450,6 +1753,25 @@ const styles = StyleSheet.create({
   passageNumero: { fontWeight: '800', color: colors.primaryDarker, fontSize: 14 },
   passagePatient: { color: colors.text, fontSize: 13.5, marginBottom: 4 },
   constantesResume: { fontSize: 12, color: colors.textMuted },
+  doublons: {
+    marginTop: 8,
+    padding: 10,
+    backgroundColor: '#fffbeb',
+    borderColor: '#fcd34d',
+    borderWidth: 1,
+    borderRadius: 10,
+  },
+  doublonsTitre: { fontSize: 12.5, fontWeight: '800', color: '#92400e', marginBottom: 6 },
+  doublonItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 5,
+    borderTopColor: '#fde68a',
+    borderTopWidth: 1,
+  },
+  doublonNom: { fontSize: 13.5, fontWeight: '700', color: '#78350f' },
+  doublonSous: { fontSize: 12, color: '#a16207' },
   vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 20 },
   modalVoile: {
     flex: 1,

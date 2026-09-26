@@ -14,6 +14,6 @@ export function getApiUrl(): string {
     //return 'https://clinique.easymanagement.tech/api'
 
   }
-   return 'http://localhost:3000/api'
-  //return 'https://clinique.easymanagement.tech/api'
+   //return 'http://localhost:3000/api'
+  return 'https://clinique.easymanagement.tech/api'
 }

@@ -500,7 +500,7 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
                     <View style={[styles.checkbox, payable && cochees.has(l.id) && styles.checkboxCochee]}>
                       {payable && cochees.has(l.id) ? <Text style={styles.checkboxTexte}>✓</Text> : null}
                     </View>
-                    <View style={{ flex: 1 }}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
                       <Text style={styles.ligneLibelle}>{l.libelle}</Text>
                       <Text style={styles.ligneService}>{l.service?.nom ?? '—'}</Text>
                       {couv ? (
@@ -509,11 +509,13 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
                           {Number(couv.partPatient ?? 0).toLocaleString('fr-FR')} F (taux {couv.taux ?? '—'} %)
                         </Text>
                       ) : null}
+                      <View style={styles.ligneStatut}>
+                        <Badge label={statut.label} tone={statut.tone} />
+                      </View>
                     </View>
                     <Text style={styles.ligneMontant}>
                       {l.statut === 'EXTERNE' ? '—' : `${Number(l.montant).toLocaleString('fr-FR')} F`}
                     </Text>
-                    <Badge label={statut.label} tone={statut.tone} />
                     {payable ? (
                       <TouchableOpacity onPress={() => retirerLigne(l)} style={styles.ligneRetirer}>
                         <Text style={styles.ligneRetirerTexte}>✕</Text>
@@ -588,27 +590,33 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
             ) : (
               paiements.map((p) => (
                 <View key={p.id} style={styles.paiementItem}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.paiementRecu}>{p.numeroRecu}</Text>
-                    <Text style={styles.paiementInfos}>
-                      {new Date(p.createdAt).toLocaleString('fr-FR')} · {p.modePaiement}
+                  <View style={styles.paiementEntete}>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={styles.paiementRecu} numberOfLines={1} ellipsizeMode="tail">
+                        {p.numeroRecu}
+                      </Text>
+                      <Text style={styles.paiementInfos} numberOfLines={1} ellipsizeMode="tail">
+                        {new Date(p.createdAt).toLocaleString('fr-FR')} · {p.modePaiement}
+                      </Text>
+                    </View>
+                    <Text style={styles.paiementMontant}>
+                      {Number(p.montantTotal).toLocaleString('fr-FR')} F
                     </Text>
                   </View>
-                  <Text style={styles.paiementMontant}>
-                    {Number(p.montantTotal).toLocaleString('fr-FR')} F
-                  </Text>
-                  <Badge label={p.statut === 'VALIDE' ? 'Validé' : 'Annulé'} tone={p.statut === 'VALIDE' ? 'success' : 'danger'} />
-                  {p.statut === 'VALIDE' ? (
-                    <Btn title="Reçu" small variant="outline" onPress={() => reimprimer(p.id)} />
-                  ) : null}
-                  {p.statut === 'VALIDE' && estAdmin ? (
-                    <Btn
-                      title="Annuler"
-                      small
-                      variant="danger"
-                      onPress={() => setModaleAnnulation({ paiement: p, motif: '' })}
-                    />
-                  ) : null}
+                  <View style={styles.paiementActions}>
+                    <Badge label={p.statut === 'VALIDE' ? 'Validé' : 'Annulé'} tone={p.statut === 'VALIDE' ? 'success' : 'danger'} />
+                    {p.statut === 'VALIDE' ? (
+                      <Btn title="Reçu" small variant="outline" onPress={() => reimprimer(p.id)} />
+                    ) : null}
+                    {p.statut === 'VALIDE' && estAdmin ? (
+                      <Btn
+                        title="Annuler"
+                        small
+                        variant="danger"
+                        onPress={() => setModaleAnnulation({ paiement: p, motif: '' })}
+                      />
+                    ) : null}
+                  </View>
                 </View>
               ))
             )}
@@ -711,6 +719,7 @@ const styles = StyleSheet.create({
   },
   checkboxCochee: { backgroundColor: colors.primary, borderColor: colors.primary },
   checkboxTexte: { color: '#fff', fontWeight: '800' },
+  ligneStatut: { marginTop: 5, alignSelf: 'flex-start' },
   ligneLibelle: { fontSize: 14, fontWeight: '700', color: colors.text },
   ligneService: { fontSize: 12, color: colors.textMuted, marginTop: 1 },
   lignePartage: { fontSize: 12, fontWeight: '700', color: colors.primaryDark, marginTop: 2 },
@@ -738,6 +747,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.warningBg,
   },
   vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 16 },
+  paiementEntete: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  paiementActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    marginTop: 6,
+  },
   paiementItem: {
     flexDirection: 'row',
     alignItems: 'center',

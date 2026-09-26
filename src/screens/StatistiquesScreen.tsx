@@ -50,7 +50,7 @@ function Tableau({ colonnes, lignes }: { colonnes: { cle: string; libelle: strin
         lignes.map((l, i) => (
           <View key={i} style={styles.ligne}>
             {colonnes.map((c) => (
-              <Text key={c.cle} style={[styles.cellule, { flex: 1 }]}>
+              <Text key={c.cle} style={[styles.cellule, { flex: 1 }]} numberOfLines={1} ellipsizeMode="tail">
                 {l[c.cle] ?? '—'}
               </Text>
             ))}
@@ -134,13 +134,13 @@ export default function StatistiquesScreen({ navigation }: { navigation: { goBac
         <View style={styles.periodeLigne}>
           <TextInput
             style={styles.periodeChamp}
-            placeholder="Du (AAAA-MM-JJ)"
+            placeholder="Du : AAAA-MM-JJ"
             value={debut}
             onChangeText={setDebut}
           />
           <TextInput
             style={styles.periodeChamp}
-            placeholder="Au (AAAA-MM-JJ)"
+            placeholder="Au : AAAA-MM-JJ"
             value={fin}
             onChangeText={setFin}
           />

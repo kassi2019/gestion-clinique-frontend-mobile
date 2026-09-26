@@ -344,7 +344,7 @@ export default function HospitalisationScreen({ navigation }: { navigation: { go
               <View key={l.id} style={[styles.lit, l.occupe ? styles.litOccupe : styles.litLibre]}>
                 <Text style={[styles.litNumero, l.occupe && { color: '#991b1b' }]}>{l.label}</Text>
                 {l.occupe ? (
-                  <Text style={styles.litPatient}>
+                  <Text style={styles.litPatient} numberOfLines={1} ellipsizeMode="tail">
                     {l.sejour?.patient?.nom} {l.sejour?.patient?.prenom}
                   </Text>
                 ) : (
