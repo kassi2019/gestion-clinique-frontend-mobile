@@ -24,6 +24,7 @@ import {
   PaginationBar,
   Screen,
   SectionTitle,
+  EtatVide,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 import ListeCombo from '../components/ListeCombo'
@@ -775,13 +776,16 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           </TouchableOpacity>
         )}
         ListEmptyComponent={
-          <Text style={styles.vide}>
-            {chargementConstantes
-              ? 'Chargement…'
-              : filtreConstantes === 'NON'
-                ? 'Aucun patient en attente de constantes.'
-                : 'Aucune constante terminée.'}
-          </Text>
+          <EtatVide
+            texte={
+              chargementConstantes
+                ? 'Chargement…'
+                : filtreConstantes === 'NON'
+                  ? 'Aucun patient en attente de constantes.'
+                  : 'Aucune constante terminée.'
+            }
+            image={!chargementConstantes}
+          />
         }
       />
     </Card>
@@ -1186,9 +1190,10 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
               </View>
             )}
             ListEmptyComponent={
-              <Text style={styles.vide}>
-                {chargementListe ? "Chargement…" : "Aucun passage ce jour."}
-              </Text>
+              <EtatVide
+                texte={chargementListe ? "Chargement…" : "Aucun passage ce jour."}
+                image={!chargementListe}
+              />
             }
           />
           <PaginationBar
@@ -1419,7 +1424,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
 
         <SectionTitle>Rattachements existants</SectionTitle>
         {rattachements.length === 0 ? (
-          <Text style={styles.vide}>Aucun rattachement.</Text>
+          <EtatVide texte="Aucun rattachement." />
         ) : (
           rattachements.map((r) => (
             <View key={r.id} style={styles.rattachementItem}>

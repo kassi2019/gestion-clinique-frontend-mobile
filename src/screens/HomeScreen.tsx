@@ -18,7 +18,9 @@ const MODULES: { code: string; label: string; icon: string; route: string | null
   { code: 'PHARMACIE', label: 'Pharmacie', icon: '💊', route: 'Pharmacie' },
   { code: 'LABORATOIRE', label: 'Laboratoire', icon: '🧪', route: 'Laboratoire' },
   { code: 'IMAGERIE', label: 'Imagerie', icon: '🩻', route: 'Imagerie' },
+  { code: 'MATERNITE', label: 'Maternité', icon: '🤰', route: 'Maternite' },
   { code: 'HOSPITALISATION', label: 'Hospitalisation', icon: '🛏️', route: 'Hospitalisation' },
+  { code: 'SOINS', label: 'Soins', icon: '💉', route: 'Soins' },
   { code: 'STATISTIQUES', label: 'Statistiques', icon: '📊', route: 'Statistiques' },
   { code: 'PARAMETRAGE', label: 'Paramétrage', icon: '⚙️', route: null },
 ]

@@ -22,6 +22,7 @@ import {
   Onglets,
   Screen,
   SectionTitle,
+  EtatVide,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 
@@ -106,8 +107,8 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
   const cliniqueId = user?.clinique?.id ?? 1
   const estAdmin = user?.role?.code === 'ADMINISTRATEUR'
 
-  // Liste sans passage ouvert : 3 onglets (comme le web)
-  const [onglet, setOnglet] = useState<'file' | 'payes' | 'recherche'>('file')
+  // Liste sans passage ouvert : 4 onglets (comme le web)
+  const [onglet, setOnglet] = useState<'file' | 'payes' | 'credits' | 'recherche'>('file')
   const [fileAttente, setFileAttente] = useState<FileItem[]>([])
   const [payes, setPayes] = useState<PayeItem[]>([])
   const [chargementListes, setChargementListes] = useState(false)
@@ -127,6 +128,76 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
   const [motifTaux, setMotifTaux] = useState('')
   const [encaissement, setEncaissement] = useState(false)
   const [recu, setRecu] = useState<string | null>(null)
+
+  // ─── Tickets de crédit / cas sociaux ──────────────────────────
+  const [credits, setCredits] = useState<any[]>([])
+  const [creditChargement, setCreditChargement] = useState(false)
+  const [modaleCredit, setModaleCredit] = useState<{ type: 'CREDIT' | 'CAS_SOCIAL'; motif: string } | null>(null)
+  const [creditEnCours, setCreditEnCours] = useState(false)
+
+  async function chargerCredits() {
+    setCreditChargement(true)
+    try {
+      const { data } = await http.get('/caisse/credits', { params: { cliniqueId, perPage: 100 } })
+      setCredits(data.data ?? [])
+    } catch {
+      setCredits([])
+    } finally {
+      setCreditChargement(false)
+    }
+  }
+
+  function ouvrirCredit(type: 'CREDIT' | 'CAS_SOCIAL') {
+    if (cochees.size === 0) {
+      Alert.alert('Caisse', 'Aucune prestation cochée.')
+      return
+    }
+    setModaleCredit({
+      type,
+      motif: type === 'CAS_SOCIAL' ? 'Patient indigent' : 'Argent pas encore disponible',
+    })
+  }
+
+  async function confirmerCredit() {
+    if (!passage || !modaleCredit) return
+    setCreditEnCours(true)
+    try {
+      const { data } = await http.post(`/caisse/passages/${passage.id}/credits`, {
+        lignesIds: [...cochees],
+        type: modaleCredit.type,
+        motif: modaleCredit.motif.trim() || undefined,
+      })
+      Alert.alert(
+        '✅ Prise en charge',
+        `${modaleCredit.type === 'CAS_SOCIAL' ? 'Cas social' : 'Ticket de crédit'} ${data.numero} créé — le patient est pris en charge par les services.`,
+      )
+      setModaleCredit(null)
+      await choisirPassage(passage)
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Impossible de créer le ticket.')
+    } finally {
+      setCreditEnCours(false)
+    }
+  }
+
+  function annulerCreditMobile(t: any) {
+    Alert.alert('Annuler le ticket ?', `${t.numero} — les prestations repasseront en attente de paiement.`, [
+      { text: 'Non', style: 'cancel' },
+      {
+        text: 'Oui, annuler',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await http.post(`/caisse/credits/${t.id}/annuler`)
+            Alert.alert('✅ Ticket annulé')
+            await chargerCredits()
+          } catch (e: any) {
+            Alert.alert('Erreur', e.response?.data?.message ?? 'Impossible d\'annuler le ticket.')
+          }
+        },
+      },
+    ])
+  }
 
   // Modales
   const [modaleAnnulation, setModaleAnnulation] = useState<{ paiement: Paiement; motif: string } | null>(null)
@@ -214,7 +285,9 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
     setCochees(n)
   }
 
-  const lignesCochees = lignes.filter((l) => l.statut === 'EN_ATTENTE' && cochees.has(l.id))
+  const lignesCochees = lignes.filter(
+    (l) => (l.statut === 'EN_ATTENTE' || l.statut === 'CREDIT') && cochees.has(l.id),
+  )
   const sousTotal = lignesCochees.reduce((s, l) => s + Number(l.montant), 0)
   const partAssuranceTotale = lignesCochees.reduce(
     (s, l) => s + Number(l.couverture?.partAssurance ?? 0),
@@ -226,6 +299,8 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
     if (l.statut === 'ANNULEE') return { label: 'Annulée', tone: 'danger' }
     if (l.statut === 'NON_PRESCRITE') return { label: 'Pas encore prescrite', tone: 'muted' }
     if (l.statut === 'EXTERNE') return { label: 'Externe (non facturable)', tone: 'muted' }
+    if (l.statut === 'CREDIT') return { label: 'Crédit', tone: 'warning' }
+    if (l.statut === 'CAS_SOCIAL') return { label: 'Cas social', tone: 'muted' }
     return { label: 'En attente', tone: 'warning' }
   }
 
@@ -373,10 +448,14 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
         <>
           <Onglets
             actif={onglet}
-            onChange={(k) => setOnglet(k as typeof onglet)}
+            onChange={(k) => {
+              setOnglet(k as typeof onglet)
+              if (k === 'credits') chargerCredits()
+            }}
             tabs={[
               { key: 'file', label: "File d'attente", count: fileAttente.length },
               { key: 'payes', label: 'Payés du jour', count: payes.length },
+              { key: 'credits', label: 'Crédits / Cas sociaux', count: credits.length },
               { key: 'recherche', label: 'Recherche' },
             ]}
           />
@@ -384,9 +463,9 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
           {onglet === 'file' ? (
             <Card>
               <SectionTitle>En attente de paiement (aujourd'hui)</SectionTitle>
-              {chargementListes ? <Text style={styles.vide}>Chargement…</Text> : null}
+              {chargementListes ? <EtatVide texte="Chargement…" image={false} /> : null}
               {!chargementListes && fileAttente.length === 0 ? (
-                <Text style={styles.vide}>Aucun passage en attente de paiement.</Text>
+                <EtatVide texte="Aucun passage en attente de paiement." />
               ) : null}
               {fileAttente.map((f) => (
                 <TouchableOpacity
@@ -413,9 +492,9 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
           {onglet === 'payes' ? (
             <Card>
               <SectionTitle>Paiements du jour</SectionTitle>
-              {chargementListes ? <Text style={styles.vide}>Chargement…</Text> : null}
+              {chargementListes ? <EtatVide texte="Chargement…" image={false} /> : null}
               {!chargementListes && payes.length === 0 ? (
-                <Text style={styles.vide}>Aucun paiement aujourd'hui.</Text>
+                <EtatVide texte="Aucun paiement aujourd'hui." />
               ) : null}
               {payes.map((p) => (
                 <View key={p.id} style={styles.paiementItem}>
@@ -428,6 +507,43 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
                   </View>
                   <Text style={styles.paiementMontant}>{Number(p.montant).toLocaleString('fr-FR')} F</Text>
                   <Btn title="Reçu" small variant="outline" onPress={() => reimprimer(p.id)} />
+                </View>
+              ))}
+            </Card>
+          ) : null}
+
+          {onglet === 'credits' ? (
+            <Card>
+              <SectionTitle>Tickets de crédit et cas sociaux (impayés)</SectionTitle>
+              {creditChargement ? <EtatVide texte="Chargement…" image={false} /> : null}
+              {!creditChargement && credits.length === 0 ? (
+                <EtatVide texte="Aucun ticket de crédit ou cas social en cours." />
+              ) : null}
+              {credits.map((c: any) => (
+                <View key={c.id} style={styles.item}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemTitre}>
+                      {c.numero} · {c.passage?.patient?.nom ?? ''} {c.passage?.patient?.prenom ?? ''}
+                    </Text>
+                    <Text style={styles.itemSous}>
+                      {c.passage?.numeroOrdre ?? '—'} ·{' '}
+                      <Badge
+                        label={c.type === 'CAS_SOCIAL' ? 'Cas social' : 'Crédit'}
+                        tone={c.type === 'CAS_SOCIAL' ? 'muted' : 'warning'}
+                      />{' '}
+                      · {Number(c.montantTotal).toLocaleString('fr-FR')} F
+                    </Text>
+                    {c.motif ? <Text style={styles.itemSous}>Motif : {c.motif}</Text> : null}
+                  </View>
+                  {c.type === 'CREDIT' ? (
+                    <Btn
+                      title="💵 Encaisser"
+                      small
+                      variant="outline"
+                      onPress={() => choisirPassage({ id: c.passageId, numeroOrdre: c.passage?.numeroOrdre ?? '', statut: '', patient: c.passage?.patient, service: undefined })}
+                    />
+                  ) : null}
+                  <Btn title="✕" small variant="outline" onPress={() => annulerCreditMobile(c)} />
                 </View>
               ))}
             </Card>
@@ -487,8 +603,8 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
             <SectionTitle>Prestations à régler</SectionTitle>
             {lignes.map((l) => {
               const statut = statutLigneLabel(l)
-              const payable = l.statut === 'EN_ATTENTE'
-              const grise = l.statut === 'NON_PRESCRITE' || l.statut === 'EXTERNE'
+              const payable = l.statut === 'EN_ATTENTE' || l.statut === 'CREDIT'
+              const grise = l.statut === 'NON_PRESCRITE' || l.statut === 'EXTERNE' || l.statut === 'CAS_SOCIAL'
               const couv = l.couverture
               return (
                 <View key={l.id}>
@@ -516,7 +632,7 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
                     <Text style={styles.ligneMontant}>
                       {l.statut === 'EXTERNE' ? '—' : `${Number(l.montant).toLocaleString('fr-FR')} F`}
                     </Text>
-                    {payable ? (
+                    {l.statut === 'EN_ATTENTE' ? (
                       <TouchableOpacity onPress={() => retirerLigne(l)} style={styles.ligneRetirer}>
                         <Text style={styles.ligneRetirerTexte}>✕</Text>
                       </TouchableOpacity>
@@ -581,12 +697,30 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
               loading={encaissement}
               disabled={sousTotal - partAssuranceTotale === 0 && cochees.size > 0}
             />
+            <View style={styles.creditBoutons}>
+              <View style={{ flex: 1 }}>
+                <Btn
+                  title="🎫 Crédit"
+                  variant="outline"
+                  onPress={() => ouvrirCredit('CREDIT')}
+                  disabled={cochees.size === 0}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Btn
+                  title="🤝 Cas social"
+                  variant="outline"
+                  onPress={() => ouvrirCredit('CAS_SOCIAL')}
+                  disabled={cochees.size === 0}
+                />
+              </View>
+            </View>
           </Card>
 
           <Card>
             <SectionTitle>Historique des paiements</SectionTitle>
             {paiements.length === 0 ? (
-              <Text style={styles.vide}>Aucun paiement.</Text>
+              <EtatVide texte="Aucun paiement." />
             ) : (
               paiements.map((p) => (
                 <View key={p.id} style={styles.paiementItem}>
@@ -679,6 +813,32 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
           />
         </Input>
       </Modale>
+
+      {/* Modale ticket de crédit / cas social (motif) */}
+      <Modale
+        visible={modaleCredit !== null}
+        titre={modaleCredit?.type === 'CAS_SOCIAL' ? '🤝 Cas social' : '🎫 Ticket de crédit'}
+        sousTitre="Les prestations cochées seront prises en charge sans paiement immédiat."
+        onFermer={() => setModaleCredit(null)}
+        actions={
+          <>
+            <Btn title="Fermer" small variant="outline" onPress={() => setModaleCredit(null)} />
+            <Btn
+              title={modaleCredit?.type === 'CAS_SOCIAL' ? 'Créer le cas social' : 'Créer le crédit'}
+              small
+              onPress={confirmerCredit}
+              loading={creditEnCours}
+            />
+          </>
+        }
+      >
+        <Input
+          label="Motif"
+          value={modaleCredit?.motif ?? ''}
+          onChangeText={(t) => modaleCredit && setModaleCredit({ ...modaleCredit, motif: t })}
+          placeholder="Ex : patient indigent, argent pas encore disponible…"
+        />
+      </Modale>
     </Screen>
   )
 }
@@ -695,6 +855,7 @@ const styles = StyleSheet.create({
   itemTitre: { fontSize: 15, fontWeight: '700', color: colors.text },
   itemSous: { fontSize: 12.5, color: colors.textMuted, marginTop: 2 },
   itemMontant: { fontSize: 14, fontWeight: '800', color: colors.primaryDarker },
+  creditBoutons: { flexDirection: 'row', gap: 10, marginTop: 10 },
   ficheTitre: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   ficheNom: { fontSize: 16, fontWeight: '800', color: colors.primaryDarker },
   ficheSous: { fontSize: 12.5, color: colors.textMuted, marginTop: 2 },

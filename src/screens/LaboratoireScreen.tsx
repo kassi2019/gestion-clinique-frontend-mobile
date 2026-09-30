@@ -11,7 +11,9 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Input, Onglets, PaginationBar, Screen, SectionTitle } from '../components/ui'
+import { ApercuTexte, Badge, Btn, Card, Input, Onglets, PaginationBar, Screen, SectionTitle,
+  EtatVide,
+} from '../components/ui'
 
 type PassageRef = {
   id: number
@@ -270,9 +272,9 @@ export default function LaboratoireScreen({ navigation }: { navigation: { goBack
           />
           {onglet === 'file' ? (
             <>
-              {fileChargement ? <Text style={styles.vide}>Chargement…</Text> : null}
+              {fileChargement ? <EtatVide texte="Chargement…" image={false} /> : null}
               {!fileChargement && fileListe.length === 0 ? (
-                <Text style={styles.vide}>Aucun patient en attente d'examen.</Text>
+                <EtatVide texte="Aucun patient en attente d'examen." />
               ) : null}
               {fileListe.map((p: any, i: number) => (
                 <View key={p.id} style={styles.item}>
@@ -316,9 +318,9 @@ export default function LaboratoireScreen({ navigation }: { navigation: { goBack
                   <Input label="Rechercher" value={histoRecherche} onChangeText={setHistoRecherche} />
                 </View>
               </View>
-              {histoChargement ? <Text style={styles.vide}>Chargement…</Text> : null}
+              {histoChargement ? <EtatVide texte="Chargement…" image={false} /> : null}
               {!histoChargement && histoListe.length === 0 ? (
-                <Text style={styles.vide}>Aucun examen.</Text>
+                <EtatVide texte="Aucun examen." />
               ) : null}
               {histoListe.map((e) => (
                 <TouchableOpacity key={e.id} style={styles.item} onPress={() => voirCompteRendu(e)}>
@@ -357,7 +359,7 @@ export default function LaboratoireScreen({ navigation }: { navigation: { goBack
           <Card>
             <SectionTitle>Examens payés</SectionTitle>
             {lignesLab.length === 0 ? (
-              <Text style={styles.vide}>Aucun examen payé pour ce passage.</Text>
+              <EtatVide texte="Aucun examen payé pour ce passage." />
             ) : (
               lignesLab.map((l: any) => (
                 <View key={l.id} style={styles.ligneMed}>

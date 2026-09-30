@@ -1,6 +1,7 @@
 import React from 'react'
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -151,6 +152,22 @@ export function ApercuTexte({ contenu }: { contenu: string }) {
       <ScrollView style={styles.apercuScroll}>
         <Text style={styles.apercuTexte}>{contenu}</Text>
       </ScrollView>
+    </View>
+  )
+}
+
+/** État vide : illustration + message (liste ou tableau sans données). */
+export function EtatVide({ texte, image = true }: { texte?: string; image?: boolean }) {
+  return (
+    <View style={styles.etatVide}>
+      {image ? (
+        <Image
+          source={require('../../assets/1425.png')}
+          style={styles.etatVideImage}
+          resizeMode="contain"
+        />
+      ) : null}
+      {texte ? <Text style={styles.etatVideTexte}>{texte}</Text> : null}
     </View>
   )
 }
@@ -369,6 +386,9 @@ const styles = StyleSheet.create({
   apercuTitre: { fontSize: 13, fontWeight: '800', color: '#134e4a', marginBottom: 8, textAlign: 'center' },
   apercuScroll: { maxHeight: 320 },
   apercuTexte: { fontFamily: 'monospace', fontSize: 11, color: '#1e293b' },
+  etatVide: { alignItems: 'center', paddingVertical: 20, gap: 10 },
+  etatVideImage: { width: 260, height: 173 },
+  etatVideTexte: { textAlign: 'center', color: colors.textMuted, fontSize: 13.5 },
   bandeau: { marginBottom: 12 },
   btnRetour: {
     alignSelf: 'flex-start',

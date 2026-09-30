@@ -12,7 +12,9 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Screen, SectionTitle } from '../components/ui'
+import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Screen, SectionTitle,
+  EtatVide,
+} from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 
 type PassageRef = {
@@ -50,7 +52,12 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   const [resultats, setResultats] = useState<PassageRef[]>([])
   const [passage, setPassage] = useState<PassageRef | null>(null)
   const [detail, setDetail] = useState<any>(null)
-  const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'examens'>('fiche')
+  const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'examens' | 'certificat'>('fiche')
+
+  useEffect(() => {
+    if (onglet === 'certificat') initCertificat()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onglet])
 
   // Fiche
   const [fiche, setFiche] = useState<any>({})
@@ -113,6 +120,69 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   const [ordoApercu, setOrdoApercu] = useState<string | null>(null)
 
   const consultation = detail?.passage?.consultation ?? null
+
+  // ── Certificat d'arrêt ──
+  const [formCert, setFormCert] = useState<any>({})
+  const [certs, setCerts] = useState<any[]>([])
+  const [savingCert, setSavingCert] = useState(false)
+
+  function initCertificat() {
+    const pat = detail?.passage?.patient
+    const personnel = user?.personnel
+    const aujourdHui = new Date()
+    const iso = (d: Date) => d.toISOString().slice(0, 10)
+    const fin = new Date(aujourdHui)
+    fin.setDate(fin.getDate() + 6)
+    setFormCert({
+      civilite: pat?.sexe === 'M' ? 'M.' : 'Mme',
+      nomPatient: pat ? `${pat.nom} ${pat.prenom}` : '',
+      dateNaissance: pat?.dateNaissance ? String(pat.dateNaissance).slice(0, 10) : '',
+      profession: pat?.profession ?? '',
+      dureeJours: '7',
+      debut: iso(aujourdHui),
+      fin: iso(fin),
+      medecin: personnel ? `Dr ${personnel.nom} ${personnel.prenom}` : '',
+      lieu: user?.clinique?.adresse || user?.clinique?.nom || 'Bloléquin',
+    })
+    chargerCertificats()
+  }
+
+  async function chargerCertificats() {
+    if (!consultation) return
+    try {
+      const { data } = await http.get(`/consultations/${consultation.id}/certificats-arret`)
+      setCerts(data ?? [])
+    } catch {
+      setCerts([])
+    }
+  }
+
+  async function enregistrerCertificat() {
+    if (!consultation) {
+      Alert.alert('Certificat', 'Enregistrez d’abord la fiche de consultation.')
+      return
+    }
+    setSavingCert(true)
+    try {
+      await http.post(`/consultations/${consultation.id}/certificat-arret`, {
+        civilite: formCert.civilite || 'Mme',
+        nomPatient: formCert.nomPatient || detail?.passage?.patient?.nom || '',
+        dateNaissance: formCert.dateNaissance || undefined,
+        profession: formCert.profession || undefined,
+        dureeJours: Number(formCert.dureeJours) || 1,
+        debut: formCert.debut,
+        fin: formCert.fin,
+        medecin: formCert.medecin,
+        lieu: formCert.lieu || undefined,
+      })
+      Alert.alert('✅ Certificat enregistré', 'Il est imprimable depuis la version web (onglet Certificat d’arrêt).')
+      chargerCertificats()
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Enregistrement impossible.')
+    } finally {
+      setSavingCert(false)
+    }
+  }
   const historique = detail?.historique ?? []
   const estInterne = passage?.statut !== 'EXTERNE' && detail?.passage?.typePatient !== 'EXTERNE'
 
@@ -507,7 +577,10 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
   // ── Résultats des examens (visibles par le médecin) ──
   const [resultatVisible, setResultatVisible] = useState(false)
-  const [resultatCourant, setResultatCourant] = useState<{ type: 'LABO' | 'IMAGERIE'; exam: any } | null>(null)
+  const [resultatCourant, setResultatCourant] = useState<{ type: 'LABO' | 'IMAGERIE'; exam: any; libelle?: string } | null>(null)
+
+  /** Fiches d'échographie établies par l'imagerie pour ce passage. */
+  const fichesPassage = (detail?.passage?.fiches ?? []) as any[]
 
   /** Retourne l'examen réalisé (avec résultats) pour une ligne de prestation. */
   function resultatExamen(l: any): { type: 'LABO' | 'IMAGERIE'; exam: any } | null {
@@ -642,13 +715,15 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
               {vueMedecin === 'file' ? (
                 <>
-                  {chargementFile ? <Text style={styles.vide}>Chargement…</Text> : null}
+                  {chargementFile ? <EtatVide texte="Chargement…" image={false} /> : null}
                   {!chargementFile && fileMedecin.enAttente.length === 0 ? (
-                    <Text style={styles.vide}>
-                      {disponibilite === 'DISPONIBLE'
-                        ? 'Aucun patient en attente pour le moment.'
-                        : 'Vous êtes indisponible : devenez disponible pour recevoir des patients.'}
-                    </Text>
+                    <EtatVide
+                      texte={
+                        disponibilite === 'DISPONIBLE'
+                          ? 'Aucun patient en attente pour le moment.'
+                          : 'Vous êtes indisponible : devenez disponible pour recevoir des patients.'
+                      }
+                    />
                   ) : null}
                   {fileMedecin.enAttente.map((a) => (
                     <TouchableOpacity
@@ -670,7 +745,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
               {vueMedecin === 'terminees' ? (
                 <>
                   {fileMedecin.terminees.length === 0 ? (
-                    <Text style={styles.vide}>Aucune consultation terminée aujourd'hui.</Text>
+                    <EtatVide texte="Aucune consultation terminée aujourd'hui." />
                   ) : null}
                   {fileMedecin.terminees.map((a) => (
                     <TouchableOpacity
@@ -741,10 +816,10 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
           {/* Onglets */}
           <View style={styles.onglets}>
-            {(['fiche', 'medicaments', 'examens'] as const).map((o) => (
+            {(['fiche', 'medicaments', 'examens', 'certificat'] as const).map((o) => (
               <TouchableOpacity key={o} style={[styles.onglet, onglet === o && styles.ongletActif]} onPress={() => setOnglet(o)}>
                 <Text style={[styles.ongletTexte, onglet === o && styles.ongletTexteActif]}>
-                  {o === 'fiche' ? 'Fiche' : o === 'medicaments' ? 'Médicaments' : 'Examens'}
+                  {o === 'fiche' ? 'Fiche' : o === 'medicaments' ? 'Médicaments' : o === 'examens' ? 'Examens' : 'Certificat'}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -1057,12 +1132,12 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                       </View>
                     </>
                   ) : (
-                    <Text style={styles.vide}>Enregistrez d'abord la fiche de consultation.</Text>
+                    <EtatVide texte="Enregistrez d'abord la fiche de consultation." />
                   )}
                 </Card>
                 {ordoApercu ? <ApercuTexte contenu={ordoApercu} /> : null}
               </>
-            ) : (
+            ) : onglet === 'examens' ? (
               <Card>
                 <SectionTitle>Examens (laboratoire / imagerie)</SectionTitle>
                 {consultation ? (
@@ -1089,13 +1164,15 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                         tone={estFait(l) ? 'success' : 'danger'}
                       />
                     </View>
-                    {resultatExamen(l) ? (
+                    {resultatExamen(l) || (l.prestation?.type === 'IMAGERIE' && fichesPassage.length > 0) ? (
                       <Btn
                         title="📋 Résultat"
                         small
                         variant="outline"
                         onPress={() => {
-                          setResultatCourant(resultatExamen(l))
+                          const r = resultatExamen(l)
+                          // Fiches seules (pas encore de CR validé) : on ouvre quand même
+                          setResultatCourant(r ?? { type: 'IMAGERIE', exam: null, libelle: l.libelle })
                           setResultatVisible(true)
                         }}
                       />
@@ -1106,6 +1183,33 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     {(l.statut === 'EN_ATTENTE' || l.statut === 'EXTERNE') && consultation ? (
                       <Btn title="✕" small variant="danger" onPress={() => retirerExamen(l)} />
                     ) : null}
+                  </View>
+                ))}
+              </Card>
+            ) : (
+              /* ── Onglet Certificat d'arrêt ── */
+              <Card>
+                <SectionTitle>Certificat d'arrêt de travail</SectionTitle>
+                <Input label="Mme / Mlle / M." value={formCert.civilite} onChangeText={(t) => setFormCert({ ...formCert, civilite: t })} />
+                <Input label="Patient(e)" value={formCert.nomPatient} onChangeText={(t) => setFormCert({ ...formCert, nomPatient: t })} />
+                <Input label="Né(e) le (AAAA-MM-JJ)" value={formCert.dateNaissance} onChangeText={(t) => setFormCert({ ...formCert, dateNaissance: t })} />
+                <Input label="Profession" value={formCert.profession} onChangeText={(t) => setFormCert({ ...formCert, profession: t })} />
+                <Input label="Durée de l'arrêt (jours)" value={formCert.dureeJours} onChangeText={(t) => setFormCert({ ...formCert, dureeJours: t })} keyboardType="numeric" />
+                <Input label="Du (AAAA-MM-JJ)" value={formCert.debut} onChangeText={(t) => setFormCert({ ...formCert, debut: t })} />
+                <Input label="Au (AAAA-MM-JJ)" value={formCert.fin} onChangeText={(t) => setFormCert({ ...formCert, fin: t })} />
+                <Input label="Médecin" value={formCert.medecin} onChangeText={(t) => setFormCert({ ...formCert, medecin: t })} />
+                <Input label="Fait à" value={formCert.lieu} onChangeText={(t) => setFormCert({ ...formCert, lieu: t })} />
+                <Btn title="💾 Enregistrer le certificat" onPress={enregistrerCertificat} loading={savingCert} />
+                <SectionTitle>Certificats enregistrés</SectionTitle>
+                {certs.length === 0 ? <EtatVide texte="Aucun certificat — enregistrez pour créer le premier." /> : null}
+                {certs.map((c: any) => (
+                  <View key={c.id} style={styles.item}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemTitre}>{c.numero} — {c.dureeJours} jour(s)</Text>
+                      <Text style={styles.itemSous}>
+                        {c.debut ? new Date(c.debut).toLocaleDateString('fr-FR') : ''} → {c.fin ? new Date(c.fin).toLocaleDateString('fr-FR') : ''}
+                      </Text>
+                    </View>
                   </View>
                 ))}
               </Card>
@@ -1148,7 +1252,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       {/* Modale : résultat d'examen (labo / imagerie) */}
       <Modale
         visible={resultatVisible}
-        titre={`📋 Résultat — ${resultatCourant?.exam.libelle ?? ''}`}
+        titre={`📋 Résultat — ${resultatCourant?.exam?.libelle ?? resultatCourant?.libelle ?? ''}`}
         onFermer={() => setResultatVisible(false)}
         actions={<Btn title="Fermer" variant="outline" onPress={() => setResultatVisible(false)} />}
       >
@@ -1170,13 +1274,35 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           </>
         ) : (
           <>
-            <InfoLigne label="Indication" value={resultatCourant?.exam.indication ?? '—'} />
-            <InfoLigne label="Technique" value={resultatCourant?.exam.technique ?? '—'} />
-            <InfoLigne label="Résultat" value={resultatCourant?.exam.resultat ?? '—'} />
-            <InfoLigne label="Conclusion" value={resultatCourant?.exam.conclusion ?? '—'} />
+            {resultatCourant?.exam ? (
+              <>
+                <InfoLigne label="Indication" value={resultatCourant.exam.indication ?? '—'} />
+                <InfoLigne label="Technique" value={resultatCourant.exam.technique ?? '—'} />
+                <InfoLigne label="Résultat" value={resultatCourant.exam.resultat ?? '—'} />
+                <InfoLigne label="Conclusion" value={resultatCourant.exam.conclusion ?? '—'} />
+              </>
+            ) : null}
+            {fichesPassage.length > 0 ? (
+              <View style={{ marginTop: 10 }}>
+                <SectionTitle>📄 Fiches d'échographie du passage</SectionTitle>
+                {fichesPassage.map((f: any) => (
+                  <View key={f.id} style={styles.item}>
+                    <Text style={styles.itemTitre}>
+                      {f.libelleType} — {new Date(f.createdAt).toLocaleDateString('fr-FR')}
+                    </Text>
+                    {f.medecin?.personnel ? (
+                      <Text style={styles.itemSous}>
+                        Dr {f.medecin.personnel.nom} {f.medecin.personnel.prenom}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.ficheTexte}>{f.texte}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </>
         )}
-        {resultatCourant?.exam.valideLe ? (
+        {resultatCourant?.exam?.valideLe ? (
           <Text style={styles.note}>
             Validé le {new Date(resultatCourant.exam.valideLe).toLocaleString('fr-FR')}
             {resultatCourant.exam.validePar?.personnel
@@ -1253,6 +1379,7 @@ const styles = StyleSheet.create({
   chipTexteActif: { color: '#fff' },
   label: { fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 6 },
   note: { fontSize: 12, color: colors.textMuted, marginTop: 8, marginBottom: 6 },
+  ficheTexte: { fontSize: 13, lineHeight: 19, color: colors.text, marginTop: 6 },
   ligne: { flexDirection: 'row', gap: 10 },
   ligneItem: { flex: 1 },
   ligneDispo: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },

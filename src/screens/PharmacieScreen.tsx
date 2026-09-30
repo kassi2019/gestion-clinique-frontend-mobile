@@ -11,7 +11,9 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Input, Modale, Onglets, Screen, SectionTitle } from '../components/ui'
+import { ApercuTexte, Badge, Btn, Card, Chips, Input, Modale, Onglets, Screen, SectionTitle,
+  EtatVide,
+} from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 
 const MODES = [
@@ -40,7 +42,12 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
   const [recu, setRecu] = useState<string | null>(null)
 
   // ── Stocks / Consommables (onglets web) ──
-  const [ongletPharma, setOngletPharma] = useState<'ordonnances' | 'stocks' | 'consommables'>('ordonnances')
+  const [ongletPharma, setOngletPharma] = useState<'ordonnances' | 'stocks'>('ordonnances')
+  const [sousOnglet, setSousOnglet] = useState<'entree' | 'inventaire' | 'mouvements'>('entree')
+  const [mouvementMedId, setMouvementMedId] = useState<number | string | null>(null)
+  const [tousLots, setTousLots] = useState<any[]>([])
+  const [inventaireSaisies, setInventaireSaisies] = useState<Record<number, string>>({})
+  const [mouvementListe, setMouvementListe] = useState<any[]>([])
   const [rechercheStock, setRechercheStock] = useState('')
   const [stocks, setStocks] = useState<any[]>([])
   const [alertes, setAlertes] = useState<{ stockBas: any[]; peremptions: any[] }>({ stockBas: [], peremptions: [] })
@@ -123,9 +130,6 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
     if (ongletPharma === 'stocks') {
       chargerAlertes()
     }
-    if (ongletPharma === 'consommables') {
-      chargerConsommables()
-    }
     if (ongletPharma === 'ordonnances') {
       chargerDispensees()
     }
@@ -192,6 +196,81 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
     } catch {
       setModaleMouvements({ med, liste: [] })
     }
+  }
+
+  async function recalculerSeuils() {
+    try {
+      await http.post('/pharmacie/seuils/recalculer', null, { params: { cliniqueId } })
+      Alert.alert('✅ Seuils recalculés', 'Consommation des 30 derniers jours ÷ 30.')
+      chargerAlertes()
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Recalcul impossible.')
+    }
+  }
+
+  async function chargerInventaireLots() {
+    setTousLots([])
+    setInventaireSaisies({})
+    try {
+      const { data } = await http.get('/pharmacie/lots', { params: { cliniqueId } })
+      setTousLots(data ?? [])
+    } catch {
+      setTousLots([])
+    }
+  }
+
+  function lotsDe(medicamentId: number) {
+    return tousLots.filter((l) => l.medicamentId === medicamentId)
+  }
+
+  function ecartLot(l: any) {
+    const saisie = inventaireSaisies[l.id]
+    if (saisie === undefined || saisie === '') return 0
+    return Number(saisie) - l.quantiteRestante
+  }
+
+  function nbSaisies() {
+    return Object.values(inventaireSaisies).filter((v) => v !== '' && v !== undefined).length
+  }
+
+  async function validerInventaireLot(l: any) {
+    const saisie = inventaireSaisies[l.id]
+    if (saisie === undefined || saisie === '') return
+    try {
+      await http.post(`/pharmacie/lots/${l.id}/inventaire`, {
+        quantiteReelle: Number(saisie),
+        commentaire: 'Inventaire mobile',
+      })
+      Alert.alert('✅ Lot ajusté', `Lot ${l.numeroLot} : ${saisie} au lieu de ${l.quantiteRestante}.`)
+      chargerInventaireLots()
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Validation impossible.')
+    }
+  }
+
+  async function validerInventaireGlobal() {
+    const lignes = tousLots
+      .filter((l) => {
+        const s = inventaireSaisies[l.id]
+        return s !== '' && s !== undefined && s !== null
+      })
+      .map((l) => ({ lotId: l.id, quantiteReelle: Number(inventaireSaisies[l.id]) }))
+    if (lignes.length === 0) return
+    Alert.alert('Valider tout l’inventaire ?', `${lignes.length} lot(s) seront ajustés.`, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Oui, valider',
+        onPress: async () => {
+          try {
+            await http.post('/pharmacie/lots/inventaire-multiple', { lignes })
+            Alert.alert('✅ Inventaire validé')
+            chargerInventaireLots()
+          } catch (e: any) {
+            Alert.alert('Erreur', e.response?.data?.message ?? 'Validation impossible.')
+          }
+        },
+      },
+    ])
   }
 
   // ── Actions consommables ──
@@ -333,14 +412,13 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
       </View>
 
       {!ordonnance ? (
-        <View style={{ padding: 16 }}>
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
           <Onglets
             actif={ongletPharma}
             onChange={(k) => setOngletPharma(k as typeof ongletPharma)}
             tabs={[
               { key: 'ordonnances', label: 'Ordonnances', count: dispensees.length },
               { key: 'stocks', label: 'Stocks', count: alertes.stockBas.length },
-              { key: 'consommables', label: 'Consommables' },
             ]}
           />
 
@@ -404,14 +482,83 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
                   ))}
                 </Card>
               ) : null}
+              {alertes.stockBas.length > 0 || alertes.peremptions.length > 0 ? (
+                <Card>
+                  <Text style={styles.itemSous}>
+                    ⚠️ {alertes.stockBas.length} médicament(s) sous le seuil ·{' '}
+                    {alertes.peremptions.length} lot(s) périmé(s) ou proches
+                  </Text>
+                </Card>
+              ) : null}
+
+              <View style={{ marginBottom: 10 }}>
+                <Btn title="🎯 Recalculer les seuils" small variant="outline" onPress={recalculerSeuils} />
+              </View>
+
+              {/* Sous-onglets : Entrée / Inventaire / Mouvements (comme le web) */}
+              <Chips
+                options={['Entrée', 'Inventaire', 'Mouvements']}
+                value={sousOnglet === 'entree' ? 'Entrée' : sousOnglet === 'inventaire' ? 'Inventaire' : 'Mouvements'}
+                onChange={(v) => {
+                  const nouveau = v === 'Entrée' ? 'entree' : v === 'Inventaire' ? 'inventaire' : 'mouvements'
+                  setSousOnglet(nouveau)
+                  if (nouveau === 'inventaire') chargerInventaireLots()
+                }}
+              />
+
+              {sousOnglet === 'inventaire' ? (
+                <Btn
+                  title={`✅ Valider tout l’inventaire (${nbSaisies()})`}
+                  variant="outline"
+                  disabled={nbSaisies() === 0}
+                  onPress={validerInventaireGlobal}
+                />
+              ) : null}
+
               <Input
                 label="Rechercher un médicament"
                 value={rechercheStock}
                 onChangeText={setRechercheStock}
                 placeholder="Nom du médicament"
               />
-              {stocks.length === 0 ? (
-                <Text style={styles.vide}>Aucun médicament en stock.</Text>
+
+              {sousOnglet === 'mouvements' ? (
+                <>
+                  <Input label="Médicament">
+                    <ListeSelect
+                      value={mouvementMedId}
+                      options={stocks.map((m) => ({ value: m.id, label: m.nom }))}
+                      placeholder="— Choisir un médicament —"
+                      onChange={(v) => {
+                        setMouvementMedId(v as number)
+                        const med = stocks.find((x) => x.id === v)
+                        if (med) {
+                          http.get(`/pharmacie/mouvements/${med.id}`)
+                            .then(({ data }) => setMouvementListe(data ?? []))
+                            .catch(() => setMouvementListe([]))
+                        }
+                      }}
+                    />
+                  </Input>
+                  {mouvementListe.length === 0 ? (
+                    <EtatVide texte="Choisissez un médicament pour voir ses mouvements." />
+                  ) : null}
+                  {mouvementListe.map((mv: any, i: number) => (
+                    <View key={i} style={styles.item}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.itemTitre}>
+                          {mv.type ?? ''} {mv.quantite != null ? `${mv.quantite > 0 ? '+' : ''}${mv.quantite}` : ''}
+                        </Text>
+                        <Text style={styles.itemSous}>
+                          {mv.date ?? mv.createdAt ? new Date(mv.date ?? mv.createdAt).toLocaleString('fr-FR') : ''}
+                          {mv.numeroLot ? ` · Lot ${mv.numeroLot}` : ''}
+                        </Text>
+                      </View>
+                    </View>
+                  ))}
+                </>
+              ) : stocks.length === 0 ? (
+                <EtatVide texte="Aucun médicament en stock." />
               ) : (
                 stocks.map((m) => (
                   <Card key={m.id}>
@@ -420,44 +567,74 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
                       Stock : {m.stock} · Seuil : {m.seuilAlerte ?? '—'} ·{' '}
                       {Number(m.prixVente ?? 0).toLocaleString('fr-FR')} F
                     </Text>
-                    <View style={styles.actionsLigne}>
-                      <Btn title="+ Entrée" small variant="outline" onPress={() => ouvrirEntree(m)} />
-                      <Btn title="Inventaire" small variant="outline" onPress={() => ouvrirInventaire(m)} />
-                      <Btn title="Mouvements" small variant="outline" onPress={() => ouvrirMouvements(m)} />
+                    <View style={[styles.statutStock, { backgroundColor: m.statutStock?.couleur ?? '#64748b' }]}>
+                      <Text style={styles.statutStockTexte}>{m.statutStock?.libelle ?? '—'}</Text>
                     </View>
-                  </Card>
-                ))
-              )}
-            </>
-          ) : null}
 
-          {ongletPharma === 'consommables' ? (
-            <>
-              <Btn
-                title="+ Nouveau consommable"
-                small
-                variant="outline"
-                onPress={() => setNouveauConsoVisible(true)}
-              />
-              {consommables.length === 0 ? (
-                <Text style={styles.vide}>Aucun consommable.</Text>
-              ) : (
-                consommables.map((c) => (
-                  <Card key={c.id}>
-                    <Text style={styles.itemTitre}>{c.nom}</Text>
-                    <Text style={styles.itemSous}>
-                      Quantité : {c.quantite} · Seuil : {c.seuilAlerte ?? '—'}
-                    </Text>
-                    <View style={styles.actionsLigne}>
-                      <Btn title="+ Entrée" small variant="outline" onPress={() => ouvrirMouvementConso(c, 'ENTREE')} />
-                      <Btn title="− Sortie" small variant="outline" onPress={() => ouvrirMouvementConso(c, 'SORTIE')} />
-                    </View>
+                    {sousOnglet === 'entree' ? (
+                      <>
+                        {(m.lots ?? []).map((l: any) => (
+                          <View key={l.id} style={styles.lotLigne}>
+                            <Badge label={l.numeroLot} tone="muted" />
+                            <Text style={styles.lotTexte}>
+                              {l.quantiteRestante} · péremption{' '}
+                              {l.datePeremption ? new Date(l.datePeremption).toLocaleDateString('fr-FR') : '—'}
+                              {l.perime ? ' ⚠️ PÉRIMÉ' : l.peremptionProche ? ' ⚠️ proche' : ''}
+                            </Text>
+                          </View>
+                        ))}
+                        <Btn title="+ Entrée" small variant="outline" onPress={() => ouvrirEntree(m)} />
+                      </>
+                    ) : (
+                      <>
+                        {lotsDe(m.id).map((l: any) => {
+                          const ecart = ecartLot(l)
+                          return (
+                            <View key={l.id} style={styles.lotInventaire}>
+                              <View style={{ flex: 1 }}>
+                                <Text style={styles.itemTitre}>
+                                  {l.numeroLot} · péremption{' '}
+                                  {l.datePeremption ? new Date(l.datePeremption).toLocaleDateString('fr-FR') : '—'}
+                                </Text>
+                                <Text style={styles.itemSous}>
+                                  Stock actuel : {l.quantiteRestante}
+                                  {inventaireSaisies[l.id] !== undefined && inventaireSaisies[l.id] !== '' ? (
+                                    <Text
+                                      style={{
+                                        color: ecart === 0 ? '#16a34a' : ecart > 0 ? '#eab308' : '#dc2626',
+                                        fontWeight: '800',
+                                      }}
+                                    >
+                                      {' '}· Écart : {ecart > 0 ? '+' : ''}{ecart}
+                                    </Text>
+                                  ) : null}
+                                </Text>
+                              </View>
+                              <TextInput
+                                style={styles.inventaireChamp}
+                                placeholder="Stock réel"
+                                keyboardType="numeric"
+                                value={inventaireSaisies[l.id] ?? ''}
+                                onChangeText={(t) => setInventaireSaisies({ ...inventaireSaisies, [l.id]: t })}
+                              />
+                              <Btn
+                                title="✅"
+                                small
+                                disabled={inventaireSaisies[l.id] === undefined || inventaireSaisies[l.id] === ''}
+                                onPress={() => validerInventaireLot(l)}
+                              />
+                            </View>
+                          )
+                        })}
+                      </>
+                    )}
                   </Card>
                 ))
               )}
+
             </>
           ) : null}
-        </View>
+        </ScrollView>
       ) : (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
           <Card>
@@ -564,7 +741,7 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
         onFermer={() => setModaleMouvements(null)}
       >
         {modaleMouvements && modaleMouvements.liste.length === 0 ? (
-          <Text style={styles.vide}>Aucun mouvement.</Text>
+          <EtatVide texte="Aucun mouvement." />
         ) : null}
         {(modaleMouvements?.liste ?? []).map((mv: any, i: number) => (
           <View key={i} style={styles.item}>
@@ -619,6 +796,42 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
 }
 
 const styles = StyleSheet.create({
+  statutStock: {
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    marginBottom: 8,
+  },
+  statutStockTexte: { color: '#fff', fontSize: 11.5, fontWeight: '800' },
+  lotLigne: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+    paddingVertical: 4,
+  },
+  lotTexte: { fontSize: 12, color: colors.textMuted, flexShrink: 1 },
+  lotInventaire: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderTopColor: colors.border,
+    borderTopWidth: 1,
+    paddingVertical: 8,
+    flexWrap: 'wrap',
+  },
+  inventaireChamp: {
+    borderColor: colors.borderChamp,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 13,
+    width: 78,
+    color: colors.text,
+    backgroundColor: colors.surface,
+  },
   bandeau: { paddingHorizontal: 16, marginBottom: 10 },
   btnRetour: {
     alignSelf: 'flex-start',

@@ -11,7 +11,9 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { Badge, Btn, Card, Input, PaginationBar, Screen, SectionTitle } from '../components/ui'
+import { Badge, Btn, Card, Input, PaginationBar, Screen, SectionTitle,
+  EtatVide,
+} from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 
 type Lit = {
@@ -356,7 +358,7 @@ export default function HospitalisationScreen({ navigation }: { navigation: { go
 
           <SectionTitle>Séjours en cours</SectionTitle>
           {sejoursEnCours.length === 0 ? (
-            <Text style={styles.vide}>Aucun patient hospitalisé actuellement.</Text>
+            <EtatVide texte="Aucun patient hospitalisé actuellement." />
           ) : (
             sejoursEnCours.map((s: any) => (
               <Card key={s.id}>
@@ -402,9 +404,9 @@ export default function HospitalisationScreen({ navigation }: { navigation: { go
               onChange={(v) => setHistoStatut(v as typeof histoStatut)}
             />
           </Input>
-          {histoChargement ? <Text style={styles.vide}>Chargement…</Text> : null}
+          {histoChargement ? <EtatVide texte="Chargement…" image={false} /> : null}
           {!histoChargement && histoListe.length === 0 ? (
-            <Text style={styles.vide}>Aucun séjour.</Text>
+            <EtatVide texte="Aucun séjour." />
           ) : null}
           {histoListe.map((s) => (
             <Card key={s.id}>

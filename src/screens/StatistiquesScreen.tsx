@@ -11,7 +11,9 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { Btn, Card, Screen, SectionTitle } from '../components/ui'
+import { Btn, Card, Screen, SectionTitle,
+  EtatVide,
+} from '../components/ui'
 
 const MENUS = [
   { code: 'tableau-bord', label: 'Tableau de bord', icon: '📊' },
@@ -45,7 +47,7 @@ function Tableau({ colonnes, lignes }: { colonnes: { cle: string; libelle: strin
         ))}
       </View>
       {lignes.length === 0 ? (
-        <Text style={styles.vide}>Aucune donnée sur la période.</Text>
+        <EtatVide texte="Aucune donnée sur la période." />
       ) : (
         lignes.map((l, i) => (
           <View key={i} style={styles.ligne}>
@@ -165,7 +167,7 @@ export default function StatistiquesScreen({ navigation }: { navigation: { goBac
 
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
         {chargement || !donnees ? (
-          <Text style={styles.vide}>{chargement ? 'Chargement…' : 'Aucune donnée.'}</Text>
+          <EtatVide texte={chargement ? 'Chargement…' : 'Aucune donnée sur la période.'} image={!chargement} />
         ) : (
           <>
             {rubrique === 'tableau-bord' ? (

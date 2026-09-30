@@ -11,7 +11,12 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Input, Onglets, PaginationBar, Screen, SectionTitle } from '../components/ui'
+import { ApercuTexte, Badge, Btn, Card, Input, Onglets, PaginationBar, Screen, SectionTitle,
+  EtatVide,
+} from '../components/ui'
+import ListeSelect from '../components/ListeSelect'
+import ListeCombo from '../components/ListeCombo'
+import DateField from '../components/DateField'
 
 type PassageRef = {
   id: number
@@ -142,9 +147,15 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
     try {
       const { data } = await http.get(`/imagerie/passages/${passageId}`)
       setDetail(data)
+      // Prescripteur = nom du patient (prérempli, modifiable)
+      const p = data?.passage?.patient
+      const nomPatient = p ? `${p.nom ?? ''} ${p.prenom ?? ''}`.trim() : ''
+      setFicheForm((f) => ({ ...f, prescripteur: f.prescripteur || nomPatient }))
     } catch {
       Alert.alert('Imagerie', 'Impossible de charger le passage.')
     }
+    chargerFichesTypes()
+    chargerFichesPassage(passageId)
   }
 
   const lignesIma = useMemo(() => {
@@ -171,6 +182,175 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
       resultat: ligne.examen?.resultat ?? '',
       conclusion: ligne.examen?.conclusion ?? '',
     })
+  }
+
+  // ── Fiches d'échographie (types paramétrés + champs de saisie) ──
+  const [fichesTypes, setFichesTypes] = useState<any[]>([])
+  const [typeFicheId, setTypeFicheId] = useState<number | null>(null)
+  const [ficheChamps, setFicheChamps] = useState<any[]>([])
+  const [ficheValeurs, setFicheValeurs] = useState<Record<string, string>>({})
+  const [ficheForm, setFicheForm] = useState({ indication: '', prescripteur: '' })
+  const [ficheTexte, setFicheTexte] = useState('')
+  const [fichesPassage, setFichesPassage] = useState<any[]>([])
+  const [ficheEnCours, setFicheEnCours] = useState(false)
+  const [ficheEditId, setFicheEditId] = useState<number | null>(null)
+  const [ficheEditLibelle, setFicheEditLibelle] = useState('')
+  // Pendant le chargement d'une fiche à modifier, ne pas régénérer le texte
+  const ficheChargementRef = React.useRef(false)
+
+  function parseChamps(json: any): any[] {
+    if (!json) return []
+    try {
+      const p = JSON.parse(json)
+      return Array.isArray(p) ? p : []
+    } catch {
+      return []
+    }
+  }
+
+  /** Fusionne les valeurs saisies dans le format du type ({code} remplacés). */
+  function genererTexteFiche() {
+    const type = fichesTypes.find((t) => t.id === typeFicheId)
+    if (!type) return ''
+    const champs = parseChamps(type.champs)
+    return String(type.texte ?? '').replace(/\{(\w+)\}/g, (_, code: string) => {
+      const c = champs.find((x) => x.code === code)
+      const v = ficheValeurs[code] != null ? String(ficheValeurs[code]).trim() : ''
+      if (v) {
+        if (c?.type === 'date' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+          const [a, m, j] = v.split('-')
+          return `${j}/${m}/${a}`
+        }
+        return v
+      }
+      return c?.defaut ?? '......'
+    })
+  }
+
+  // À chaque saisie dans un champ, le texte de la fiche se régénère
+  useEffect(() => {
+    if (!ficheChargementRef.current) setFicheTexte(genererTexteFiche())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ficheValeurs])
+
+  async function chargerFichesTypes() {
+    try {
+      const { data } = await http.get('/imagerie/fiches-types', { params: { cliniqueId } })
+      setFichesTypes(data ?? [])
+    } catch {
+      setFichesTypes([])
+    }
+  }
+
+  async function chargerFichesPassage(passageId?: number) {
+    const id = passageId ?? passage?.id
+    if (!id) return
+    try {
+      const { data } = await http.get(`/imagerie/passages/${id}/fiches`)
+      setFichesPassage(data ?? [])
+    } catch {
+      setFichesPassage([])
+    }
+  }
+
+  function choisirTypeFiche(v: number | string | null) {
+    setTypeFicheId(v as number)
+    setFicheEditId(null)
+    setFicheEditLibelle('')
+    const type = fichesTypes.find((t) => t.id === v)
+    setFicheChamps(type ? parseChamps(type.champs) : [])
+    setFicheValeurs({})
+    if (type) {
+      const champs = parseChamps(type.champs)
+      setFicheTexte(
+        String(type.texte ?? '').replace(/\{(\w+)\}/g, (_, code: string) => {
+          const c = champs.find((x) => x.code === code)
+          return c?.defaut ?? '......'
+        }),
+      )
+    } else {
+      setFicheTexte('')
+    }
+  }
+
+  /** Recharge une fiche enregistrée pour la modifier. */
+  function ouvrirEditionFiche(f: any) {
+    ficheChargementRef.current = true
+    setFicheEditId(f.id)
+    setFicheEditLibelle(f.libelleType ?? '')
+    setTypeFicheId(f.typeFicheId)
+    setFicheChamps(parseChamps(fichesTypes.find((t) => t.id === f.typeFicheId)?.champs))
+    try {
+      setFicheValeurs(JSON.parse(f.valeurs ?? '{}'))
+    } catch {
+      setFicheValeurs({})
+    }
+    setFicheTexte(f.texte ?? '')
+    setFicheForm({
+      indication: f.indication ?? '',
+      prescripteur: f.prescripteur ?? '',
+    })
+    setTimeout(() => {
+      ficheChargementRef.current = false
+    }, 0)
+  }
+
+  function annulerEdition() {
+    setFicheEditId(null)
+    setFicheEditLibelle('')
+    setTypeFicheId(null)
+    setFicheChamps([])
+    setFicheValeurs({})
+    setFicheTexte('')
+    // Prescripteur = nom du patient par défaut
+    const nomPatient = passage ? `${passage.patient.nom ?? ''} ${passage.patient.prenom ?? ''}`.trim() : ''
+    setFicheForm({ indication: '', prescripteur: nomPatient })
+  }
+
+  async function enregistrerFiche() {
+    if (!passage) return
+    if (!ficheEditId && !typeFicheId) {
+      Alert.alert('Fiche', 'Choisissez un type de fiche.')
+      return
+    }
+    if (!ficheTexte.trim()) {
+      Alert.alert('Fiche', 'Le texte du compte rendu est vide.')
+      return
+    }
+    setFicheEnCours(true)
+    try {
+      const corps = {
+        texte: ficheTexte,
+        valeurs: ficheValeurs,
+        indication: ficheForm.indication || undefined,
+        prescripteur: ficheForm.prescripteur || undefined,
+      }
+      if (ficheEditId) {
+        await http.patch(`/imagerie/fiches/${ficheEditId}`, corps)
+        Alert.alert('✅ Fiche modifiée')
+        annulerEdition()
+      } else {
+        await http.post(`/imagerie/passages/${passage.id}/fiches`, {
+          ...corps,
+          typeFicheId,
+        })
+        Alert.alert('✅ Fiche enregistrée')
+      }
+      await chargerFichesPassage()
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Enregistrement impossible.')
+    } finally {
+      setFicheEnCours(false)
+    }
+  }
+
+  async function imprimerFiche(ficheId: number) {
+    try {
+      const { data } = await http.post(`/imagerie/fiches/${ficheId}/imprimer`)
+      Alert.alert('🖨️ Impression A4', data.message ?? 'Fiche envoyée à l’imprimante du poste.')
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Impression impossible.')
+    }
   }
 
   async function enregistrerCr() {
@@ -247,9 +427,9 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
           />
           {onglet === 'file' ? (
             <>
-              {fileChargement ? <Text style={styles.vide}>Chargement…</Text> : null}
+              {fileChargement ? <EtatVide texte="Chargement…" image={false} /> : null}
               {!fileChargement && fileListe.length === 0 ? (
-                <Text style={styles.vide}>Aucun patient en attente d'examen.</Text>
+                <EtatVide texte="Aucun patient en attente d'examen." />
               ) : null}
               {fileListe.map((p: any, i: number) => (
                 <View key={p.id} style={styles.item}>
@@ -293,9 +473,9 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
                   <Input label="Rechercher" value={histoRecherche} onChangeText={setHistoRecherche} />
                 </View>
               </View>
-              {histoChargement ? <Text style={styles.vide}>Chargement…</Text> : null}
+              {histoChargement ? <EtatVide texte="Chargement…" image={false} /> : null}
               {!histoChargement && histoListe.length === 0 ? (
-                <Text style={styles.vide}>Aucun examen.</Text>
+                <EtatVide texte="Aucun examen." />
               ) : null}
               {histoListe.map((e) => (
                 <TouchableOpacity key={e.id} style={styles.item} onPress={() => voirCompteRendu(e)}>
@@ -335,7 +515,7 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
           <Card>
             <SectionTitle>Examens payés</SectionTitle>
             {lignesIma.length === 0 ? (
-              <Text style={styles.vide}>Aucun examen payé pour ce passage.</Text>
+              <EtatVide texte="Aucun examen payé pour ce passage." />
             ) : (
               lignesIma.map((l: any) => (
                 <View key={l.id} style={styles.ligneMed}>
@@ -352,6 +532,123 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
                 </View>
               ))
             )}
+          </Card>
+
+          <Card>
+            <SectionTitle>📄 Fiches d'échographie</SectionTitle>
+            {ficheEditId ? (
+              <View style={styles.editionEntete}>
+                <Text style={styles.editionTitre}>✏️ Modification — {ficheEditLibelle}</Text>
+                <Btn title="Annuler" small variant="outline" onPress={annulerEdition} />
+              </View>
+            ) : (
+              <ListeSelect
+                value={typeFicheId}
+                options={fichesTypes.map((t: any) => ({ value: t.id as number, label: t.libelle as string }))}
+                placeholder="— Choisir un type de fiche —"
+                onChange={choisirTypeFiche}
+              />
+            )}
+            <View style={styles.ficheChamps}>
+              <Input
+                label="Indication"
+                value={ficheForm.indication}
+                onChangeText={(t) => setFicheForm((f) => ({ ...f, indication: t }))}
+              />
+              <Input
+                label="Prescripteur"
+                value={ficheForm.prescripteur}
+                onChangeText={(t) => setFicheForm((f) => ({ ...f, prescripteur: t }))}
+              />
+            </View>
+
+            {/* Champs de saisie du type choisi */}
+            {ficheChamps.map((c: any) => (
+              <View key={c.code} style={{ marginTop: 8 }}>
+                {c.type === 'choix' ? (
+                  <ListeCombo
+                    label={c.libelle}
+                    value={ficheValeurs[c.code] ?? ''}
+                    options={(c.options ?? []).map((o: string) => ({ value: o, label: o }))}
+                    placeholder="— choisir ou saisir —"
+                    onChange={(v) => setFicheValeurs((vals) => ({ ...vals, [c.code]: v }))}
+                  />
+                ) : c.type === 'date' ? (
+                  <DateField
+                    label={c.libelle}
+                    value={ficheValeurs[c.code] ?? ''}
+                    onChange={(v) => setFicheValeurs((vals) => ({ ...vals, [c.code]: v }))}
+                  />
+                ) : c.type === 'nombre' ? (
+                  <Input
+                    label={c.unite ? `${c.libelle} (${c.unite})` : c.libelle}
+                    value={ficheValeurs[c.code] ?? ''}
+                    keyboardType="numeric"
+                    onChangeText={(t) => setFicheValeurs((vals) => ({ ...vals, [c.code]: t }))}
+                  />
+                ) : c.multiligne ? (
+                  <View>
+                    <Text style={styles.labelTexte}>{c.libelle}</Text>
+                    <TextInput
+                      style={styles.champTexte}
+                      multiline
+                      value={ficheValeurs[c.code] ?? ''}
+                      onChangeText={(t) => setFicheValeurs((vals) => ({ ...vals, [c.code]: t }))}
+                      autoCapitalize="sentences"
+                      textAlignVertical="top"
+                      placeholder="……"
+                    />
+                  </View>
+                ) : (
+                  <View>
+                    <Text style={styles.labelTexte}>{c.libelle}</Text>
+                    <TextInput
+                      style={styles.champSaisie}
+                      value={ficheValeurs[c.code] ?? ''}
+                      onChangeText={(t) => setFicheValeurs((vals) => ({ ...vals, [c.code]: t }))}
+                      autoCapitalize="sentences"
+                      placeholder="……"
+                    />
+                  </View>
+                )}
+              </View>
+            ))}
+
+            <Text style={styles.labelTexte}>Compte rendu (valeurs + format — modifiable)</Text>
+            <TextInput
+              style={styles.texteFiche}
+              multiline
+              value={ficheTexte}
+              onChangeText={setFicheTexte}
+              autoCapitalize="sentences"
+              textAlignVertical="top"
+            />
+            <View style={styles.ficheActions}>
+              <Btn
+                title={ficheEditId ? '💾 Modifier la fiche' : '💾 Enregistrer la fiche'}
+                onPress={enregistrerFiche}
+                loading={ficheEnCours}
+              />
+            </View>
+
+            {fichesPassage.length > 0 ? (
+              <View style={styles.fichesListe}>
+                <Text style={styles.labelTexte}>Fiches enregistrées</Text>
+                {fichesPassage.map((f: any) => (
+                  <View key={f.id} style={styles.ligneFiche}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.ficheNom}>{f.libelleType}</Text>
+                      <Text style={styles.ficheDate}>
+                        {new Date(f.createdAt).toLocaleDateString('fr-FR')} ·{' '}
+                        {new Date(f.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    </View>
+                    <Btn title="✏️" small variant="outline" onPress={() => ouvrirEditionFiche(f)} />
+                    <Btn title="🖨️" small onPress={() => imprimerFiche(f.id)} />
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </Card>
         </ScrollView>
       )}
@@ -441,4 +738,54 @@ const styles = StyleSheet.create({
   },
   modalTitre: { fontSize: 17, fontWeight: '800', color: colors.primaryDarker, marginBottom: 12 },
   modalActions: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginTop: 14 },
+  // Fiches d'échographie
+  editionEntete: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  editionTitre: { fontSize: 14, fontWeight: '800', color: colors.primaryDarker, flexShrink: 1 },
+  ficheChamps: { marginTop: 10 },
+  labelTexte: { fontSize: 13, fontWeight: '700', color: colors.textMuted, marginTop: 10, marginBottom: 4 },
+  champSaisie: {
+    backgroundColor: colors.surface,
+    borderColor: colors.borderChamp,
+    borderWidth: 1.5,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14.5,
+    color: colors.text,
+  },
+  champTexte: {
+    backgroundColor: colors.surface,
+    borderColor: colors.borderChamp,
+    borderWidth: 1.5,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14.5,
+    lineHeight: 21,
+    color: colors.text,
+    minHeight: 80,
+  },
+  texteFiche: {
+    backgroundColor: colors.surface,
+    borderColor: colors.borderChamp,
+    borderWidth: 1.5,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14.5,
+    lineHeight: 22,
+    color: colors.text,
+    minHeight: 220,
+  },
+  ficheActions: { marginTop: 10 },
+  fichesListe: { marginTop: 14 },
+  ligneFiche: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    paddingVertical: 10,
+  },
+  ficheDate: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
 })
