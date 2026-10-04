@@ -11,7 +11,7 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Input, Onglets, PaginationBar, Screen, SectionTitle,
+import { ApercuTexte, Badge, Btn, Card, Input, Modale, Onglets, PaginationBar, Screen, SectionTitle,
   EtatVide,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
@@ -353,6 +353,82 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
     }
   }
 
+  // ── Aperçu A4 de la fiche avant impression ──
+  const [apercuFiche, setApercuFiche] = useState<any>(null)
+
+  /** Découpe le texte en segments (valeurs saisies → gras), comme le web. */
+  function decouperValeursFiche(texte: string, valeurs: any): { t: string; val: boolean }[] {
+    const vals: string[] = []
+    try {
+      const v = typeof valeurs === 'string' ? JSON.parse(valeurs) : valeurs
+      if (v && typeof v === 'object') {
+        for (const x of Object.values(v)) {
+          const s = x != null ? String(x).trim() : ''
+          if (s.length >= 1) vals.push(s)
+        }
+      }
+    } catch {
+      return [{ t: texte ?? '', val: false }]
+    }
+    vals.sort((a, b) => b.length - a.length)
+    const CAR = '0-9A-Za-zÀ-ÖØ-öø-ÿ'
+    const echapperRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const marqueurs: { token: string; val: string }[] = []
+    let texte2 = texte ?? ''
+    vals.forEach((val, i) => {
+      if (!texte2.includes(val)) return
+      const token = `\u0000V${i}\u0000`
+      const regex = new RegExp(`(^|[^${CAR}])(${echapperRegex(val)})(?![${CAR}])`, 'g')
+      let trouve = false
+      texte2 = texte2.replace(regex, (tout: string, avant: string) => {
+        trouve = true
+        return avant + token
+      })
+      if (trouve) marqueurs.push({ token, val })
+    })
+    const segments: { t: string; val: boolean }[] = []
+    let reste = texte2
+    while (reste.length) {
+      let prochain = -1
+      let prochainToken: { token: string; val: string } | null = null
+      for (const m of marqueurs) {
+        const idx = reste.indexOf(m.token)
+        if (idx !== -1 && (prochain === -1 || idx < prochain)) {
+          prochain = idx
+          prochainToken = m
+        }
+      }
+      if (prochain === -1) {
+        segments.push({ t: reste, val: false })
+        break
+      }
+      if (prochain > 0) segments.push({ t: reste.slice(0, prochain), val: false })
+      segments.push({ t: prochainToken!.val, val: true })
+      reste = reste.slice(prochain + prochainToken!.token.length)
+    }
+    return segments
+  }
+
+  function ouvrirApercuFiche(f: any) {
+    const type = fichesTypes.find((t) => t.id === f.typeFicheId)
+    setApercuFiche({
+      fiche: f,
+      titre: (type?.titre || type?.libelle || f.libelleType || '').toUpperCase(),
+      titre2: (type?.titre2 || '').toUpperCase(),
+    })
+  }
+
+  async function confirmerImpression() {
+    if (!apercuFiche) return
+    try {
+      const { data } = await http.post(`/imagerie/fiches/${apercuFiche.fiche.id}/imprimer`)
+      Alert.alert('🖨️ Impression A4', data.message ?? 'Fiche envoyée à l’imprimante du poste.')
+      setApercuFiche(null)
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Impression impossible.')
+    }
+  }
+
   async function enregistrerCr() {
     if (!passage || !crCible) return
     if (!crForm.indication.trim() && !crForm.technique.trim() && !crForm.resultat.trim() && !crForm.conclusion.trim()) {
@@ -644,7 +720,7 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
                       </Text>
                     </View>
                     <Btn title="✏️" small variant="outline" onPress={() => ouvrirEditionFiche(f)} />
-                    <Btn title="🖨️" small onPress={() => imprimerFiche(f.id)} />
+                    <Btn title="🖨️" small onPress={() => ouvrirApercuFiche(f)} />
                   </View>
                 ))}
               </View>
@@ -652,6 +728,49 @@ export default function ImagerieScreen({ navigation }: { navigation: { goBack: (
           </Card>
         </ScrollView>
       )}
+
+      {/* Modale : aperçu A4 de la fiche avant impression */}
+      <Modale
+        visible={apercuFiche !== null}
+        titre="📄 Aperçu de la fiche"
+        onFermer={() => setApercuFiche(null)}
+        actions={
+          <>
+            <Btn title="Fermer" variant="outline" onPress={() => setApercuFiche(null)} />
+            <Btn title="🖨️ Imprimer (poste)" onPress={confirmerImpression} />
+          </>
+        }
+      >
+        {apercuFiche ? (
+          <View style={styles.apercuFiche}>
+            <Text style={styles.apercuFicheEntete}>IMAGERIE MÉDICALE</Text>
+            <Text style={styles.apercuFicheRep}>RÉPUBLIQUE DE CÔTE D'IVOIRE</Text>
+            <Text style={styles.apercuFicheDev}>Union - Discipline - Travail</Text>
+            <Text style={styles.apercuFicheTitre}>{apercuFiche.titre}</Text>
+            {apercuFiche.titre2 ? <Text style={styles.apercuFicheTitre}>{apercuFiche.titre2}</Text> : null}
+            <View style={styles.apercuFicheLigne}>
+              <Text style={styles.apercuFicheLabel}>Patient</Text>
+              <Text style={styles.apercuFicheValeur}>
+                {passage?.patient?.nom ?? ''} {passage?.patient?.prenom ?? ''}
+              </Text>
+            </View>
+            <View style={styles.apercuFicheLigne}>
+              <Text style={styles.apercuFicheLabel}>Date</Text>
+              <Text style={styles.apercuFicheValeur}>
+                {new Date(apercuFiche.fiche.createdAt).toLocaleDateString('fr-FR')}
+              </Text>
+            </View>
+            <Text style={styles.apercuFicheTexte}>
+              {decouperValeursFiche(apercuFiche.fiche.texte, apercuFiche.fiche.valeurs).map((s, i) => (
+                <Text key={i} style={s.val ? styles.apercuFicheVal : undefined}>
+                  {s.t}
+                </Text>
+              ))}
+            </Text>
+            <Text style={styles.apercuFicheSign}>Le Médecin — Signature et cachet</Text>
+          </View>
+        ) : null}
+      </Modale>
 
       {/* Modale compte rendu */}
       {crCible ? (
@@ -788,4 +907,16 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   ficheDate: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  // Aperçu A4 de la fiche
+  apercuFiche: { backgroundColor: '#fff', padding: 14, borderRadius: 8, borderColor: '#cbd5e1', borderWidth: 1 },
+  apercuFicheEntete: { textAlign: 'center', fontWeight: '800', fontSize: 14, letterSpacing: 1 },
+  apercuFicheRep: { textAlign: 'center', fontWeight: '700', fontSize: 11, marginTop: 2 },
+  apercuFicheDev: { textAlign: 'center', fontStyle: 'italic', fontSize: 10, color: '#475569', marginTop: 1 },
+  apercuFicheTitre: { textAlign: 'center', fontWeight: '800', fontSize: 12.5, textDecorationLine: 'underline', marginTop: 8 },
+  apercuFicheLigne: { flexDirection: 'row', gap: 8, marginTop: 6 },
+  apercuFicheLabel: { fontWeight: '700', fontSize: 11, width: 60 },
+  apercuFicheValeur: { fontSize: 11, flex: 1 },
+  apercuFicheTexte: { fontSize: 11.5, lineHeight: 17, marginTop: 10, borderTopWidth: 1, borderTopColor: '#334155', paddingTop: 8 },
+  apercuFicheVal: { fontWeight: '800' },
+  apercuFicheSign: { textAlign: 'right', fontStyle: 'italic', fontSize: 10, marginTop: 14, color: '#475569' },
 })

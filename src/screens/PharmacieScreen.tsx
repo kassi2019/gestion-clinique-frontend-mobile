@@ -11,10 +11,11 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Chips, Input, Modale, Onglets, Screen, SectionTitle,
+import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Onglets, Screen, SectionTitle,
   EtatVide,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
+import DateField from '../components/DateField'
 
 const MODES = [
   { value: 'ESPECES', label: '💵 Espèces' },
@@ -42,7 +43,7 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
   const [recu, setRecu] = useState<string | null>(null)
 
   // ── Stocks / Consommables (onglets web) ──
-  const [ongletPharma, setOngletPharma] = useState<'ordonnances' | 'stocks'>('ordonnances')
+  const [ongletPharma, setOngletPharma] = useState<'ordonnances' | 'stocks' | 'financier'>('ordonnances')
   const [sousOnglet, setSousOnglet] = useState<'entree' | 'inventaire' | 'mouvements'>('entree')
   const [mouvementMedId, setMouvementMedId] = useState<number | string | null>(null)
   const [tousLots, setTousLots] = useState<any[]>([])
@@ -60,6 +61,105 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
   const [nouveauConsoVisible, setNouveauConsoVisible] = useState(false)
   const [nouveauConso, setNouveauConso] = useState({ nom: '', unite: '', quantite: '', seuilAlerte: '' })
   const [enCoursStock, setEnCoursStock] = useState(false)
+
+  // ── Péremptions ≤ 30 j (badge) + retraits + points financiers ──
+  const [nbPeremptions30, setNbPeremptions30] = useState(0)
+  const [peremptionsListe, setPeremptionsListe] = useState<any[]>([])
+  const [peremptionsVisible, setPeremptionsVisible] = useState(false)
+  const [retraitVisible, setRetraitVisible] = useState(false)
+  const [retraitCible, setRetraitCible] = useState<any>(null)
+  const [retraitForm, setRetraitForm] = useState({ quantite: '', motif: '', commentaire: '' })
+  const [retraitEnCours, setRetraitEnCours] = useState(false)
+  const [financier, setFinancier] = useState<any>({ recus: 0, vendus: 0, perdus: 0, correctifs: 0, restants: 0 })
+  const [financierDebut, setFinancierDebut] = useState('')
+  const [financierFin, setFinancierFin] = useState('')
+  const [retraitsListe, setRetraitsListe] = useState<any[]>([])
+
+  async function chargerPeremptions() {
+    try {
+      const { data } = await http.get('/pharmacie/peremptions', { params: { cliniqueId, jours: 30 } })
+      setPeremptionsListe(data ?? [])
+      setNbPeremptions30((data ?? []).length)
+    } catch {
+      setNbPeremptions30(0)
+    }
+  }
+
+  function ouvrirPeremptions() {
+    setPeremptionsVisible(true)
+    chargerPeremptions()
+  }
+
+  // ── Stock bas (badge + modale) ──
+  const [stockBasVisible, setStockBasVisible] = useState(false)
+
+  function ouvrirStockBas() {
+    chargerAlertes()
+    setStockBasVisible(true)
+  }
+
+  function ouvrirRetrait(l: any) {
+    setRetraitCible(l)
+    setRetraitForm({ quantite: String(l.quantiteRestante ?? ''), motif: '', commentaire: '' })
+    setPeremptionsVisible(false)
+    setRetraitVisible(true)
+  }
+
+  async function confirmerRetrait() {
+    if (!retraitCible || !retraitForm.quantite || !retraitForm.motif) {
+      Alert.alert('Retrait', 'Renseignez la quantité et le motif.')
+      return
+    }
+    setRetraitEnCours(true)
+    try {
+      await http.post(`/pharmacie/lots/${retraitCible.id}/retrait`, {
+        quantite: Number(retraitForm.quantite),
+        motif: retraitForm.motif,
+        commentaire: retraitForm.commentaire.trim() || undefined,
+      })
+      Alert.alert('✅ Retrait enregistré', 'Le stock a été mis à jour.')
+      setRetraitVisible(false)
+      chargerAlertes()
+      chargerPeremptions()
+      chargerFinancier()
+      // recharge les stocks
+      const { data } = await http.get('/pharmacie/stocks', { params: { cliniqueId } })
+      setStocks(data ?? [])
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Retrait impossible.')
+    } finally {
+      setRetraitEnCours(false)
+    }
+  }
+
+  async function chargerFinancier() {
+    try {
+      const [f, r] = await Promise.all([
+        http.get('/pharmacie/financier', {
+          params: {
+            cliniqueId,
+            debut: financierDebut || undefined,
+            fin: financierFin || undefined,
+          },
+        }),
+        http.get('/pharmacie/retraits', {
+          params: {
+            cliniqueId,
+            debut: financierDebut || undefined,
+            fin: financierFin || undefined,
+          },
+        }),
+      ])
+      setFinancier(f.data ?? {})
+      setRetraitsListe(r.data ?? [])
+    } catch {
+      /* valeurs à zéro */
+    }
+  }
+
+  function montant(x: any) {
+    return `${Number(x ?? 0).toLocaleString('fr-FR')} F`
+  }
 
   useEffect(() => {
     const q = recherche.trim()
@@ -127,14 +227,58 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
 
   // Chargement des onglets Stocks/Consommables à la première ouverture
   useEffect(() => {
+    chargerPeremptions()
     if (ongletPharma === 'stocks') {
       chargerAlertes()
     }
     if (ongletPharma === 'ordonnances') {
       chargerDispensees()
     }
+    if (ongletPharma === 'financier') {
+      chargerFinancier()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ongletPharma])
+
+  // ── Actualisation temps réel : toutes les 30 secondes ──
+  useEffect(() => {
+    const timer = setInterval(() => {
+      chargerPeremptions()
+      chargerAlertes()
+      if (ongletPharma === 'financier') chargerFinancier()
+    }, 30000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ongletPharma])
+
+  // ── Détail d'un bloc financier (modale) ──
+  const [detailFinVisible, setDetailFinVisible] = useState<{ type: string; titre: string } | null>(null)
+  const [detailFinListe, setDetailFinListe] = useState<any[]>([])
+
+  const LIBELLES_FIN: Record<string, string> = {
+    recus: '📥 Médicaments reçus',
+    vendus: '📤 Médicaments vendus',
+    perdus: '🗑️ Médicaments perdus',
+    correctifs: '🧮 Correctif d’inventaire',
+    restants: '📦 Médicaments restants',
+  }
+
+  async function ouvrirDetailFin(type: string) {
+    setDetailFinVisible({ type, titre: LIBELLES_FIN[type] ?? type })
+    try {
+      const { data } = await http.get('/pharmacie/financier/detail', {
+        params: {
+          cliniqueId,
+          type,
+          debut: financierDebut || undefined,
+          fin: financierFin || undefined,
+        },
+      })
+      setDetailFinListe(data ?? [])
+    } catch {
+      setDetailFinListe([])
+    }
+  }
 
   // ── Actions stocks ──
   function ouvrirEntree(med: any) {
@@ -413,14 +557,102 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
 
       {!ordonnance ? (
         <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+          <View style={{ flexDirection: 'row', gap: 10, marginBottom: 10 }}>
+            <TouchableOpacity
+              style={[
+                styles.badgePeremption,
+                { flex: 1 },
+                nbPeremptions30 > 0 ? styles.badgePeremptionActif : null,
+              ]}
+              onPress={ouvrirPeremptions}
+            >
+              <Text style={styles.badgePeremptionTexte}>
+                ⏳ Péremption ≤ 30 j : {nbPeremptions30}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.badgePeremption,
+                { flex: 1 },
+                alertes.stockBas.length > 0 ? styles.badgeStockBasActif : null,
+              ]}
+              onPress={ouvrirStockBas}
+            >
+              <Text style={styles.badgeStockBasTexte}>
+                ⚠️ Stock bas : {alertes.stockBas.length}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           <Onglets
             actif={ongletPharma}
-            onChange={(k) => setOngletPharma(k as typeof ongletPharma)}
+            onChange={(k) => {
+              setOngletPharma(k as typeof ongletPharma)
+              if (k === 'financier') chargerFinancier()
+            }}
             tabs={[
               { key: 'ordonnances', label: 'Ordonnances', count: dispensees.length },
               { key: 'stocks', label: 'Stocks', count: alertes.stockBas.length },
+              { key: 'financier', label: 'Financier' },
             ]}
           />
+
+          {ongletPharma === 'financier' ? (
+            <>
+              <Card>
+                <SectionTitle>💰 Points financiers</SectionTitle>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <View style={{ flex: 1 }}>
+                    <DateField label="Du" value={financierDebut} onChange={(v) => { setFinancierDebut(v); chargerFinancier() }} placeholder="— —" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <DateField label="Au" value={financierFin} onChange={(v) => { setFinancierFin(v); chargerFinancier() }} placeholder="— —" />
+                  </View>
+                </View>
+                <TouchableOpacity onPress={() => ouvrirDetailFin('recus')}>
+                  <InfoLigne label="📥 Médicaments reçus 👁️" value={montant(financier.recus)} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => ouvrirDetailFin('vendus')}>
+                  <InfoLigne label="📤 Médicaments vendus 👁️" value={montant(financier.vendus)} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => ouvrirDetailFin('perdus')}>
+                  <InfoLigne label="🗑️ Médicaments perdus 👁️" value={montant(financier.perdus)} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => ouvrirDetailFin('correctifs')}>
+                  <InfoLigne
+                    label="🧮 Correctif d'inventaire 👁️"
+                    value={`${financier.correctifs > 0 ? '+' : ''}${montant(financier.correctifs)}`}
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => ouvrirDetailFin('restants')}>
+                  <InfoLigne label="📦 Médicaments restants 👁️" value={montant(financier.restants)} />
+                </TouchableOpacity>
+              </Card>
+              <Card>
+                <SectionTitle>Rapport des retraits</SectionTitle>
+                {retraitsListe.length === 0 ? (
+                  <EtatVide texte="Aucun retrait sur la période." />
+                ) : (
+                  retraitsListe.map((r: any) => (
+                    <View key={r.id} style={styles.item}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.itemTitre}>
+                          {r.medicament?.nom ?? ''} — {r.reference ?? 'Retrait'}
+                        </Text>
+                        <Text style={styles.itemSous}>
+                          {r.quantite} unité(s) · {new Date(r.createdAt).toLocaleDateString('fr-FR')}
+                          {r.utilisateur?.personnel
+                            ? ` · ${r.utilisateur.personnel.nom} ${r.utilisateur.personnel.prenom}`
+                            : ''}
+                        </Text>
+                      </View>
+                      <Badge label={r.reference ?? 'Retrait'} tone="danger" />
+                    </View>
+                  ))
+                )}
+              </Card>
+            </>
+          ) : null}
 
           {ongletPharma === 'ordonnances' ? (
             <>
@@ -623,6 +855,12 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
                                 disabled={inventaireSaisies[l.id] === undefined || inventaireSaisies[l.id] === ''}
                                 onPress={() => validerInventaireLot(l)}
                               />
+                              <Btn
+                                title="↩️"
+                                small
+                                variant="outline"
+                                onPress={() => ouvrirRetrait(l)}
+                              />
                             </View>
                           )
                         })}
@@ -791,6 +1029,132 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
         <Input label="Quantité initiale" value={nouveauConso.quantite} onChangeText={(t) => setNouveauConso({ ...nouveauConso, quantite: t })} keyboardType="numeric" />
         <Input label="Seuil d'alerte" value={nouveauConso.seuilAlerte} onChangeText={(t) => setNouveauConso({ ...nouveauConso, seuilAlerte: t })} keyboardType="numeric" />
       </Modale>
+
+      {/* Modale : stock bas */}
+      <Modale
+        visible={stockBasVisible}
+        titre={`⚠️ Médicaments sous le seuil (${alertes.stockBas.length})`}
+        onFermer={() => setStockBasVisible(false)}
+        actions={<Btn title="Fermer" variant="outline" onPress={() => setStockBasVisible(false)} />}
+      >
+        {alertes.stockBas.length === 0 ? (
+          <EtatVide texte="Aucun médicament sous le seuil." />
+        ) : (
+          alertes.stockBas.map((m: any) => (
+            <View key={`sb${m.id}`} style={styles.item}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.itemTitre}>{m.nom}</Text>
+                <Text style={styles.itemSous}>
+                  Stock : {m.stock} · Seuil : {m.seuilAlerte ?? '—'}
+                </Text>
+              </View>
+              <Badge label={m.stock <= 0 ? 'Rupture' : 'Sous stock'} tone={m.stock <= 0 ? 'danger' : 'warning'} />
+            </View>
+          ))
+        )}
+      </Modale>
+
+      {/* Modale : détail d'un bloc financier */}
+      <Modale
+        visible={detailFinVisible !== null}
+        titre={detailFinVisible?.titre ?? ''}
+        onFermer={() => setDetailFinVisible(null)}
+        actions={<Btn title="Fermer" variant="outline" onPress={() => setDetailFinVisible(null)} />}
+      >
+        {detailFinListe.length === 0 ? (
+          <EtatVide texte="Aucune ligne sur la période." />
+        ) : (
+          detailFinListe.map((l: any, i: number) => (
+            <View key={i} style={styles.item}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.itemTitre}>
+                  {l.medicament ?? l.patient ?? `Ligne ${i + 1}`}
+                </Text>
+                <Text style={styles.itemSous}>
+                  {l.lot ? `Lot ${l.lot} · ` : ''}
+                  {l.quantite != null ? `${l.quantite} unité(s) · ` : ''}
+                  {l.motif ? `${l.motif} · ` : ''}
+                  {l.date ? new Date(l.date).toLocaleDateString('fr-FR') : l.peremption ?? ''}
+                </Text>
+              </View>
+              <Text style={styles.itemMontant}>{montant(l.montant)}</Text>
+            </View>
+          ))
+        )}
+      </Modale>
+
+      {/* Modale : péremptions ≤ 30 jours */}
+      <Modale
+        visible={peremptionsVisible}
+        titre={`⏳ Péremptions ≤ 30 jours (${peremptionsListe.length})`}
+        onFermer={() => setPeremptionsVisible(false)}
+        actions={<Btn title="Fermer" variant="outline" onPress={() => setPeremptionsVisible(false)} />}
+      >
+        {peremptionsListe.length === 0 ? (
+          <EtatVide texte="Aucun lot ne périme dans les 30 jours." />
+        ) : (
+          peremptionsListe.map((l: any) => (
+            <View key={l.id} style={styles.item}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.itemTitre}>
+                  {l.medicament?.nom ?? ''} {l.medicament?.dosage ? `· ${l.medicament.dosage}` : ''}
+                </Text>
+                <Text style={styles.itemSous}>
+                  Lot {l.numeroLot} · péremption{' '}
+                  {l.datePeremption ? new Date(l.datePeremption).toLocaleDateString('fr-FR') : '—'} · stock{' '}
+                  {l.quantiteRestante}
+                </Text>
+              </View>
+              <Btn title="↩️" small variant="outline" onPress={() => ouvrirRetrait(l)} />
+            </View>
+          ))
+        )}
+      </Modale>
+
+      {/* Modale : retrait d'un lot */}
+      <Modale
+        visible={retraitVisible}
+        titre={`↩️ Retirer du stock — lot ${retraitCible?.numeroLot ?? ''}`}
+        sousTitre={
+          retraitCible
+            ? `${retraitCible.medicament?.nom ?? ''} — stock actuel : ${retraitCible.quantiteRestante} unité(s)`
+            : undefined
+        }
+        onFermer={() => setRetraitVisible(false)}
+        actions={
+          <>
+            <Btn title="Annuler" variant="outline" onPress={() => setRetraitVisible(false)} />
+            <Btn title="↩️ Retirer" onPress={confirmerRetrait} loading={retraitEnCours} />
+          </>
+        }
+      >
+        <Input
+          label="Quantité à retirer *"
+          value={retraitForm.quantite}
+          onChangeText={(t) => setRetraitForm((f) => ({ ...f, quantite: t }))}
+          keyboardType="numeric"
+        />
+        <Input label="Motif *">
+          <ListeSelect
+            value={retraitForm.motif}
+            options={[
+              { value: 'RETOUR_FOURNISSEUR', label: 'Retour fournisseur' },
+              { value: 'PERIME', label: 'Périmé' },
+              { value: 'CASSE', label: 'Casse' },
+              { value: 'PERTE', label: 'Perte' },
+              { value: 'AUTRE', label: 'Autre' },
+            ]}
+            placeholder="— Choisir —"
+            onChange={(v) => setRetraitForm((f) => ({ ...f, motif: v as string }))}
+          />
+        </Input>
+        <Input
+          label="Commentaire"
+          value={retraitForm.commentaire}
+          onChangeText={(t) => setRetraitForm((f) => ({ ...f, commentaire: t }))}
+          placeholder="Ex : boîte abîmée…"
+        />
+      </Modale>
     </Screen>
   )
 }
@@ -821,6 +1185,35 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     flexWrap: 'wrap',
   },
+  badgePeremption: {
+    backgroundColor: colors.surface,
+    borderColor: colors.borderChamp,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  badgePeremptionActif: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
+  },
+  badgePeremptionTexte: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#b45309',
+  },
+  badgeStockBasActif: {
+    backgroundColor: '#fee2e2',
+    borderColor: '#dc2626',
+  },
+  badgeStockBasTexte: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#b91c1c',
+  },
+  itemMontant: { fontSize: 13.5, fontWeight: '800', color: colors.primaryDarker },
   inventaireChamp: {
     borderColor: colors.borderChamp,
     borderWidth: 1,

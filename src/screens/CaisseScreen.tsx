@@ -301,6 +301,7 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
     if (l.statut === 'EXTERNE') return { label: 'Externe (non facturable)', tone: 'muted' }
     if (l.statut === 'CREDIT') return { label: 'Crédit', tone: 'warning' }
     if (l.statut === 'CAS_SOCIAL') return { label: 'Cas social', tone: 'muted' }
+    if ((l as any).gratuit) return { label: 'Gratuit (≤ 10 j)', tone: 'success' }
     return { label: 'En attente', tone: 'warning' }
   }
 

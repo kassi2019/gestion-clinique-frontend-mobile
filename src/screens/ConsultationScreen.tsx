@@ -110,6 +110,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
   // Examens
   const [nouvelExamenId, setNouvelExamenId] = useState<number | null>(null)
+  const [nouvelExamenLaboId, setNouvelExamenLaboId] = useState<number | null>(null)
+  const [nouvelExamenImagerieId, setNouvelExamenImagerieId] = useState<number | null>(null)
   const [nouvelExamenLibre, setNouvelExamenLibre] = useState('')
   const [examenEnCours, setExamenEnCours] = useState(false)
 
@@ -560,13 +562,16 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     }
   }
 
-  // ── Examens ──
+  // ── Examens (séparés : laboratoire / imagerie) ──
   const optionsExamens = useMemo(() => {
     const deja = new Set((detail?.passage?.prestations ?? []).map((l: any) => l.prestationId).filter(Boolean))
     return prestations
       .filter((p) => p.actif && p.type !== 'CONSULTATION' && !deja.has(p.id))
-      .map((p) => ({ value: p.id, label: p.libelle }))
+      .map((p) => ({ value: p.id, label: p.libelle, type: p.type }))
   }, [prestations, detail])
+
+  const optionsExamensLabo = optionsExamens.filter((o: any) => o.type === 'EXAMEN_LABO')
+  const optionsExamensImagerie = optionsExamens.filter((o: any) => o.type === 'IMAGERIE')
 
   /** Un examen est « déjà fait » si le service concerné l'a validé. */
   function estFait(l: any): boolean {
@@ -581,6 +586,60 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
   /** Fiches d'échographie établies par l'imagerie pour ce passage. */
   const fichesPassage = (detail?.passage?.fiches ?? []) as any[]
+
+  /** Découpe le texte d'une fiche en segments (valeurs saisies → gras). */
+  function decouperValeurs(texte: string, valeurs: any): { t: string; val: boolean }[] {
+    const vals: string[] = []
+    try {
+      const v = typeof valeurs === 'string' ? JSON.parse(valeurs) : valeurs
+      if (v && typeof v === 'object') {
+        for (const x of Object.values(v)) {
+          const s = x != null ? String(x).trim() : ''
+          if (s.length >= 1) vals.push(s)
+        }
+      }
+    } catch {
+      return [{ t: texte ?? '', val: false }]
+    }
+    vals.sort((a, b) => b.length - a.length)
+    const CAR = '0-9A-Za-zÀ-ÖØ-öø-ÿ'
+    const echapperRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const marqueurs: { token: string; val: string }[] = []
+    let texte2 = texte ?? ''
+    vals.forEach((val, i) => {
+      if (!texte2.includes(val)) return
+      const token = `\u0000V${i}\u0000`
+      // Garde : la valeur doit être entourée de caractères non alphanumériques
+      const regex = new RegExp(`(^|[^${CAR}])(${echapperRegex(val)})(?![${CAR}])`, 'g')
+      let trouve = false
+      texte2 = texte2.replace(regex, (tout: string, avant: string) => {
+        trouve = true
+        return avant + token
+      })
+      if (trouve) marqueurs.push({ token, val })
+    })
+    const segments: { t: string; val: boolean }[] = []
+    let reste = texte2
+    while (reste.length) {
+      let prochain = -1
+      let prochainToken: { token: string; val: string } | null = null
+      for (const m of marqueurs) {
+        const idx = reste.indexOf(m.token)
+        if (idx !== -1 && (prochain === -1 || idx < prochain)) {
+          prochain = idx
+          prochainToken = m
+        }
+      }
+      if (prochain === -1) {
+        segments.push({ t: reste, val: false })
+        break
+      }
+      if (prochain > 0) segments.push({ t: reste.slice(0, prochain), val: false })
+      segments.push({ t: prochainToken!.val, val: true })
+      reste = reste.slice(prochain + prochainToken!.token.length)
+    }
+    return segments
+  }
 
   /** Retourne l'examen réalisé (avec résultats) pour une ligne de prestation. */
   function resultatExamen(l: any): { type: 'LABO' | 'IMAGERIE'; exam: any } | null {
@@ -604,6 +663,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       })
       Alert.alert('✅ Examen ajouté', 'Payable à la caisse.')
       setNouvelExamenId(null)
+      setNouvelExamenLaboId(null)
+      setNouvelExamenImagerieId(null)
       await chargerDetail(passage!.id)
     } catch (e: any) {
       Alert.alert('Erreur', e.response?.data?.message ?? 'Ajout impossible.')
@@ -1085,9 +1146,34 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     {historique.map((h: any, i: number) => (
                       <View key={i} style={styles.item}>
                         <Text style={styles.itemTitre}>
-                          {new Date(h.createdAt ?? h.date).toLocaleDateString('fr-FR')} · {h.diagnostic ?? 'Consultation'}
+                          {new Date(h.createdAt ?? h.date).toLocaleDateString('fr-FR')} ·{' '}
+                          {h.diagnostic ?? 'Consultation'} · {h.passage?.service?.nom ?? ''}
                         </Text>
                         <Text style={styles.itemSous}>{h.motif ?? ''}</Text>
+                        {(h.medicaments ?? []).length > 0 ? (
+                          <Text style={styles.itemSous}>
+                            💊 {(h.medicaments as any[]).map((m) => m.nom).join(', ')}
+                          </Text>
+                        ) : null}
+                        {(h.passage?.examensLabo ?? []).length > 0 ? (
+                          <Text style={styles.itemSous}>
+                            🔬 {(h.passage.examensLabo as any[])
+                              .map((e) => `${e.libelle} : ${(e.lignes ?? []).map((lg: any) => `${lg.parametre} ${lg.valeur}`).join(', ') || '—'}${e.conclusion ? ` (${e.conclusion})` : ''}`)
+                              .join(' · ')}
+                          </Text>
+                        ) : null}
+                        {(h.passage?.examensImagerie ?? []).length > 0 ? (
+                          <Text style={styles.itemSous}>
+                            🩻 {(h.passage.examensImagerie as any[])
+                              .map((e) => `${e.libelle}${e.conclusion ? ` : ${e.conclusion}` : ''}`)
+                              .join(' · ')}
+                          </Text>
+                        ) : null}
+                        {(h.passage?.fichesExamenImagerie ?? []).length > 0 ? (
+                          <Text style={styles.itemSous}>
+                            📄 {(h.passage.fichesExamenImagerie as any[]).map((f) => f.libelleType).join(', ')}
+                          </Text>
+                        ) : null}
                       </View>
                     ))}
                   </Card>
@@ -1143,7 +1229,26 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                 {consultation ? (
                   <>
                     <Input label="Examen du catalogue">
-                      <ListeSelect value={nouvelExamenId} options={optionsExamens} placeholder="— Choisir un examen —" onChange={(v) => setNouvelExamenId(v as number)} />
+                      <ListeSelect
+                        value={nouvelExamenLaboId}
+                        options={optionsExamensLabo}
+                        placeholder="— 🔬 Laboratoire —"
+                        onChange={(v) => {
+                          setNouvelExamenLaboId(v as number)
+                          setNouvelExamenImagerieId(null)
+                          setNouvelExamenId(v as number)
+                        }}
+                      />
+                      <ListeSelect
+                        value={nouvelExamenImagerieId}
+                        options={optionsExamensImagerie}
+                        placeholder="— 🩻 Imagerie —"
+                        onChange={(v) => {
+                          setNouvelExamenImagerieId(v as number)
+                          setNouvelExamenLaboId(null)
+                          setNouvelExamenId(v as number)
+                        }}
+                      />
                     </Input>
                     <Btn title="＋ Ajouter l'examen" variant="outline" onPress={ajouterExamen} loading={examenEnCours} disabled={!nouvelExamenId} />
                     <View style={{ marginTop: 10 }}>
@@ -1295,7 +1400,13 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                         Dr {f.medecin.personnel.nom} {f.medecin.personnel.prenom}
                       </Text>
                     ) : null}
-                    <Text style={styles.ficheTexte}>{f.texte}</Text>
+                    <Text style={styles.ficheTexte}>
+                      {decouperValeurs(f.texte, f.valeurs).map((s, i) => (
+                        <Text key={i} style={s.val ? styles.ficheValeur : undefined}>
+                          {s.t}
+                        </Text>
+                      ))}
+                    </Text>
                   </View>
                 ))}
               </View>
@@ -1380,6 +1491,7 @@ const styles = StyleSheet.create({
   label: { fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 6 },
   note: { fontSize: 12, color: colors.textMuted, marginTop: 8, marginBottom: 6 },
   ficheTexte: { fontSize: 13, lineHeight: 19, color: colors.text, marginTop: 6 },
+  ficheValeur: { fontWeight: '800' },
   ligne: { flexDirection: 'row', gap: 10 },
   ligneItem: { flex: 1 },
   ligneDispo: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
