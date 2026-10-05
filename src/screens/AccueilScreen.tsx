@@ -1006,7 +1006,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                   keyboardType="phone-pad"
                 />
                 <ListeCombo
-                  label="Ville (résidence)"
+                  label="Résidence"
                   value={ville}
                   options={listes.residence}
                   placeholder="— Choisir une ville —"
@@ -1566,7 +1566,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           </View>
           <View style={styles.ligneItem}>
             <ListeCombo
-              label="Ville (résidence)"
+              label="Résidence"
               value={modifForm.ville}
               options={listes.residence}
               placeholder="— Choisir —"
@@ -1640,7 +1640,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           </>
         ) : null}
         <ListeCombo
-          label="Motif"
+          label="Motif de consultation"
           value={modifForm.motif}
           options={listes.motif}
           placeholder="— Choisir un motif —"

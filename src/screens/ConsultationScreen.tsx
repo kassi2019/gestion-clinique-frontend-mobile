@@ -16,6 +16,8 @@ import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Screen,
   EtatVide,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
+import ListeCombo from '../components/ListeCombo'
+import ReferenceFicheMobile from '../components/ReferenceFicheMobile'
 
 type PassageRef = {
   id: number
@@ -52,7 +54,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   const [resultats, setResultats] = useState<PassageRef[]>([])
   const [passage, setPassage] = useState<PassageRef | null>(null)
   const [detail, setDetail] = useState<any>(null)
-  const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'examens' | 'certificat'>('fiche')
+  const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'examens' | 'reference' | 'certificat'>('fiche')
 
   useEffect(() => {
     if (onglet === 'certificat') initCertificat()
@@ -61,6 +63,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
   // Fiche
   const [fiche, setFiche] = useState<any>({})
+  /** Listes paramétrées de la fiche (diagnostic, pathologie, nationalité, résidence, posologie, profession). */
+  const [listes, setListes] = useState<Record<string, { value: string; label: string }[]>>({})
   const [saving, setSaving] = useState(false)
 
   // Médicaments
@@ -191,8 +195,20 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   // IMC calculé automatiquement à partir des constantes de l'accueil
   // (taille en cm côté accueil → conversion en mètres).
   const poidsKg = Number(detail?.passage?.poids)
-  const tailleCm = Number(detail?.passage?.taille)
-  const imcCalcule = poidsKg && tailleCm ? (poidsKg / Math.pow(tailleCm / 100, 2)).toFixed(1) : ''
+  const tailleSaisie = Number(String(detail?.passage?.taille ?? '').replace(',', '.'))
+  // Taille en cm (165) ou déjà en m (1,65)
+  const tailleM = tailleSaisie > 3 ? tailleSaisie / 100 : tailleSaisie
+  const imcCalcule = poidsKg && tailleM ? (poidsKg / Math.pow(tailleM, 2)).toFixed(1) : ''
+
+  /** Tests cochés qui seront inscrits sur l'ordonnance (règle du serveur). */
+  const faitTest = (v: any) => ['positif', 'négatif'].includes(String(v ?? '').toLowerCase())
+  const testsOrdonnance = [
+    faitTest(fiche.tdrPaludisme) ? 'Test de diagnostic rapide' : null,
+    fiche.cdipRealise === true ? 'Test de VIH' : null,
+    String(fiche.tauxHemoglobine ?? '').trim() ? "Taux d'hémoglobine" : null,
+    faitTest(fiche.testSyphilis) ? 'Test de syphilis' : null,
+    faitTest(fiche.testHepatite) ? "Test d'hépatite" : null,
+  ].filter(Boolean) as string[]
 
   useEffect(() => {
     const q = recherche.trim()
@@ -344,8 +360,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           imc: c.imc ?? '',
           zscore: c.zscore ?? '',
           frequenceRespiratoire: c.frequenceRespiratoire ?? '',
-          perimetreBrachial: c.perimetreBrachial ?? '',
-          perimetreCranien: c.perimetreCranien ?? '',
+          perimetreBrachial: c.perimetreBrachial || data.passage.perimetreBrachial || '',
+          perimetreCranien: c.perimetreCranien || data.passage.perimetreCranien || '',
           rechercheTB: c.rechercheTB,
           tdrPaludisme: c.tdrPaludisme,
           goutteEpaisse: c.goutteEpaisse,
@@ -356,6 +372,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           codeDepistage: c.codeDepistage ?? '',
           glycemieAjeun: c.glycemieAjeun ?? '',
           glycemieNonAjeun: c.glycemieNonAjeun ?? '',
+          tauxHemoglobine: c.tauxHemoglobine ?? '',
+          testSyphilis: c.testSyphilis ?? '',
+          testHepatite: c.testHepatite ?? '',
           autresExamens: c.autresExamens ?? '',
           casPresumeTB: c.casPresumeTB,
           moDureeHeures: c.moDureeHeures ?? '',
@@ -392,7 +411,27 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     NATIONALITE: '/nationalites',
     RESIDENCE: '/residences',
     POSOLOGIE: '/posologies',
+    PROFESSION: '/professions',
   }
+
+  async function chargerListes() {
+    try {
+      const codes = Object.keys(ROUTES_LISTES)
+      const reps = await Promise.all(codes.map((c) => http.get(ROUTES_LISTES[c], { params: { cliniqueId } })))
+      const out: Record<string, { value: string; label: string }[]> = {}
+      codes.forEach((c, i) => {
+        out[c.toLowerCase()] = ((reps[i].data ?? []) as any[]).map((x) => ({ value: x.libelle, label: x.libelle }))
+      })
+      setListes(out)
+    } catch {
+      /* listes vides */
+    }
+  }
+
+  useEffect(() => {
+    chargerListes()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function alimenterListe(code: string, libelle?: string) {
     if (!libelle?.trim() || !ROUTES_LISTES[code]) return
@@ -442,6 +481,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         codeDepistage: vider(fiche.codeDepistage),
         glycemieAjeun: vider(fiche.glycemieAjeun),
         glycemieNonAjeun: vider(fiche.glycemieNonAjeun),
+        tauxHemoglobine: vider(fiche.tauxHemoglobine),
+        testSyphilis: vider(fiche.testSyphilis),
+        testHepatite: vider(fiche.testHepatite),
         autresExamens: vider(fiche.autresExamens),
         casPresumeTB: fiche.casPresumeTB,
         moDureeHeures: vider(fiche.moDureeHeures),
@@ -474,7 +516,10 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       alimenterListe('PATHOLOGIE', fiche.pathologiesAssociees)
       alimenterListe('NATIONALITE', fiche.nationalite)
       alimenterListe('RESIDENCE', fiche.residenceActuelle)
+      alimenterListe('RESIDENCE', fiche.residenceHabituelle)
+      alimenterListe('PROFESSION', fiche.profession)
       await chargerDetail(passage.id)
+      chargerListes()
     } catch (e: any) {
       const msg = e.response?.data?.message
       Alert.alert('Erreur', Array.isArray(msg) ? msg.join('\n') : msg ?? 'Enregistrement impossible.')
@@ -586,6 +631,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
   /** Fiches d'échographie établies par l'imagerie pour ce passage. */
   const fichesPassage = (detail?.passage?.fiches ?? []) as any[]
+
+  /** Détail d'une consultation passée (modale : ordonnance, examens, résultats). */
+  const [histoDetail, setHistoDetail] = useState<any>(null)
 
   /** Découpe le texte d'une fiche en segments (valeurs saisies → gras). */
   function decouperValeurs(texte: string, valeurs: any): { t: string; val: boolean }[] {
@@ -877,10 +925,22 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
           {/* Onglets */}
           <View style={styles.onglets}>
-            {(['fiche', 'medicaments', 'examens', 'certificat'] as const).map((o) => (
+            {(['fiche', 'medicaments', 'examens', 'reference', 'certificat'] as const).map((o) => (
               <TouchableOpacity key={o} style={[styles.onglet, onglet === o && styles.ongletActif]} onPress={() => setOnglet(o)}>
-                <Text style={[styles.ongletTexte, onglet === o && styles.ongletTexteActif]}>
-                  {o === 'fiche' ? 'Fiche' : o === 'medicaments' ? 'Médicaments' : o === 'examens' ? 'Examens' : 'Certificat'}
+                <Text
+                  style={[styles.ongletTexte, onglet === o && styles.ongletTexteActif]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                >
+                  {o === 'fiche'
+                    ? 'Fiche'
+                    : o === 'medicaments'
+                      ? 'Médicaments'
+                      : o === 'examens'
+                        ? 'Examens'
+                        : o === 'reference'
+                          ? 'Référence'
+                          : 'Certificat'}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -893,7 +953,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   <SectionTitle>Consultation</SectionTitle>
                   <Input label="Motif" value={fiche.motif ?? ''} onChangeText={(t) => setFiche({ ...fiche, motif: t })} />
                   <Input label="Examen physique (observation)" value={fiche.observation ?? ''} onChangeText={(t) => setFiche({ ...fiche, observation: t })} multiline />
-                  <Input label="Diagnostic" value={fiche.diagnostic ?? ''} onChangeText={(t) => setFiche({ ...fiche, diagnostic: t })} multiline />
+                  <ListeCombo label="Diagnostic" value={fiche.diagnostic ?? ''} options={listes.diagnostic ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, diagnostic: v })} />
                   <Text style={styles.label}>Mode d'entrée</Text>
                   <Chips
                     options={['Venue directe', 'Référé(e) centre', 'Référé(e) médecin', 'Autre']}
@@ -917,7 +977,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   <Input label="Traitement antérieur" value={fiche.traitementAnterieur ?? ''} onChangeText={(t) => setFiche({ ...fiche, traitementAnterieur: t })} />
                   <Input label="Antécédents médicaux" value={fiche.antecedentsMedicaux ?? ''} onChangeText={(t) => setFiche({ ...fiche, antecedentsMedicaux: t })} />
                   <Input label="Antécédents chirurgicaux" value={fiche.antecedentsChirurgicaux ?? ''} onChangeText={(t) => setFiche({ ...fiche, antecedentsChirurgicaux: t })} />
-                  <Input label="Pathologies associées" value={fiche.pathologiesAssociees ?? ''} onChangeText={(t) => setFiche({ ...fiche, pathologiesAssociees: t })} />
+                  <ListeCombo label="Pathologies associées" value={fiche.pathologiesAssociees ?? ''} options={listes.pathologie ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, pathologiesAssociees: v })} />
                 </Card>
                 <Card>
                   <SectionTitle>Constantes & examen physique</SectionTitle>
@@ -942,17 +1002,21 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                 <Card>
                   <SectionTitle>Dépistages</SectionTitle>
                   <Text style={styles.label}>Recherche de TB</Text>
-                  <Chips options={['Oui', 'Non']} value={fiche.rechercheTB == null ? null : fiche.rechercheTB ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, rechercheTB: v === 'Oui' })} />
-                  <Text style={styles.label}>Cas présumé TB</Text>
-                  <Chips options={['Oui', 'Non']} value={fiche.casPresumeTB == null ? null : fiche.casPresumeTB ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, casPresumeTB: v === 'Oui' })} />
+                  <Chips options={['Oui', 'Non', 'NA']} value={fiche.rechercheTB || null} onChange={(v) => setFiche({ ...fiche, rechercheTB: v })} />
+                  <Text style={styles.label}>Cas présumé de TB référé</Text>
+                  <Chips
+                    options={['À revoir', 'Décédé(e)']}
+                    value={fiche.casPresumeTB === 'A_REVOIR' ? 'À revoir' : fiche.casPresumeTB === 'DECEDE' ? 'Décédé(e)' : null}
+                    onChange={(v) => setFiche({ ...fiche, casPresumeTB: v === 'À revoir' ? 'A_REVOIR' : 'DECEDE' })}
+                  />
                   <Text style={styles.label}>TDR paludisme</Text>
-                  <Chips options={['Oui', 'Non']} value={fiche.tdrPaludisme == null ? null : fiche.tdrPaludisme ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, tdrPaludisme: v === 'Oui' })} />
+                  <Chips options={['positif', 'négatif', 'non réalisé', 'NA']} value={fiche.tdrPaludisme || null} onChange={(v) => setFiche({ ...fiche, tdrPaludisme: v })} />
                   <Text style={styles.label}>Goutte épaisse</Text>
-                  <Chips options={['Oui', 'Non']} value={fiche.goutteEpaisse == null ? null : fiche.goutteEpaisse ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, goutteEpaisse: v === 'Oui' })} />
+                  <Chips options={['positive', 'négative', 'non réalisée', 'NA']} value={fiche.goutteEpaisse || null} onChange={(v) => setFiche({ ...fiche, goutteEpaisse: v })} />
                   <Text style={styles.label}>MILDA éligible</Text>
-                  <Chips options={['Oui', 'Non']} value={fiche.mildaEligible == null ? null : fiche.mildaEligible ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, mildaEligible: v === 'Oui' })} />
+                  <Chips options={['Oui', 'Non', 'NA']} value={fiche.mildaEligible || null} onChange={(v) => setFiche({ ...fiche, mildaEligible: v })} />
                   <Text style={styles.label}>MILDA remise</Text>
-                  <Chips options={['Oui', 'Non']} value={fiche.mildaRemise == null ? null : fiche.mildaRemise ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, mildaRemise: v === 'Oui' })} />
+                  <Chips options={['Oui', 'Non', 'NA']} value={fiche.mildaRemise || null} onChange={(v) => setFiche({ ...fiche, mildaRemise: v })} />
                   <Text style={styles.label}>CDIP proposé</Text>
                   <Chips options={['Oui', 'Non']} value={fiche.cdipPropose == null ? null : fiche.cdipPropose ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, cdipPropose: v === 'Oui' })} />
                   <Text style={styles.label}>CDIP réalisé</Text>
@@ -966,16 +1030,24 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                       <Input label="Glycémie non à jeun" value={fiche.glycemieNonAjeun ?? ''} onChangeText={(t) => setFiche({ ...fiche, glycemieNonAjeun: t })} keyboardType="numeric" />
                     </View>
                   </View>
+                  <Input label="Taux d'hémoglobine (g/dl)" value={fiche.tauxHemoglobine ?? ''} onChangeText={(t) => setFiche({ ...fiche, tauxHemoglobine: t })} keyboardType="numeric" />
+                  <Text style={styles.label}>Test de syphilis</Text>
+                  <Chips options={['positif', 'négatif', 'non réalisé']} value={fiche.testSyphilis || null} onChange={(v) => setFiche({ ...fiche, testSyphilis: v })} />
+                  <Text style={styles.label}>Test d'hépatite</Text>
+                  <Chips options={['positif', 'négatif', 'non réalisé']} value={fiche.testHepatite || null} onChange={(v) => setFiche({ ...fiche, testHepatite: v })} />
+                  {testsOrdonnance.length > 0 ? (
+                    <Text style={styles.note}>🧾 Inscrits sur l'ordonnance à l'enregistrement : {testsOrdonnance.join(', ')}</Text>
+                  ) : null}
                   <Input label="Autres examens" value={fiche.autresExamens ?? ''} onChangeText={(t) => setFiche({ ...fiche, autresExamens: t })} />
                 </Card>
                 <Card>
                   <SectionTitle>Données administratives</SectionTitle>
                   <View style={styles.ligne}>
                     <View style={styles.ligneItem}>
-                      <Input label="Profession" value={fiche.profession ?? ''} onChangeText={(t) => setFiche({ ...fiche, profession: t })} />
+                      <ListeCombo label="Profession" value={fiche.profession ?? ''} options={listes.profession ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, profession: v })} />
                     </View>
                     <View style={styles.ligneItem}>
-                      <Input label="Nationalité" value={fiche.nationalite ?? ''} onChangeText={(t) => setFiche({ ...fiche, nationalite: t })} />
+                      <ListeCombo label="Nationalité" value={fiche.nationalite ?? ''} options={listes.nationalite ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, nationalite: v })} />
                     </View>
                   </View>
                   <Input label="Scolarisation" value={fiche.scolarisation ?? ''} onChangeText={(t) => setFiche({ ...fiche, scolarisation: t })} />
@@ -983,8 +1055,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   <Input label="Type de population" value={fiche.typePopulation ?? ''} onChangeText={(t) => setFiche({ ...fiche, typePopulation: t })} />
                   <Input label="Protection sociale" value={fiche.protectionSociale ?? ''} onChangeText={(t) => setFiche({ ...fiche, protectionSociale: t })} />
                   <Input label="Populations à risque" value={fiche.populationsRisque ?? ''} onChangeText={(t) => setFiche({ ...fiche, populationsRisque: t })} />
-                  <Input label="Résidence habituelle" value={fiche.residenceHabituelle ?? ''} onChangeText={(t) => setFiche({ ...fiche, residenceHabituelle: t })} />
-                  <Input label="Résidence actuelle" value={fiche.residenceActuelle ?? ''} onChangeText={(t) => setFiche({ ...fiche, residenceActuelle: t })} />
+                  <ListeCombo label="Résidence habituelle" value={fiche.residenceHabituelle ?? ''} options={listes.residence ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, residenceHabituelle: v })} />
+                  <ListeCombo label="Résidence actuelle" value={fiche.residenceActuelle ?? ''} options={listes.residence ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, residenceActuelle: v })} />
                 </Card>
                 <Card>
                   <SectionTitle>Hospitalisation</SectionTitle>
@@ -1070,7 +1142,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     onChangeText={setFicheMedNom}
                     placeholder="Nom du médicament"
                   />
-                  <Input label="Posologie" value={ficheMedPoso} onChangeText={setFicheMedPoso} placeholder="Ex : 1 cp 3x/j" />
+                  <ListeCombo label="Posologie" value={ficheMedPoso} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={setFicheMedPoso} />
                   <View style={styles.ligne}>
                     <View style={styles.ligneItem}>
                       <Input label="Quantité" value={ficheMedQte} onChangeText={setFicheMedQte} placeholder="Ex : 2 boîtes" />
@@ -1142,39 +1214,22 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                 </Card>
                 {historique.length > 0 ? (
                   <Card>
-                    <SectionTitle>Historique médical</SectionTitle>
+                    <SectionTitle>Historique médical — du plus récent au plus ancien</SectionTitle>
                     {historique.map((h: any, i: number) => (
-                      <View key={i} style={styles.item}>
-                        <Text style={styles.itemTitre}>
-                          {new Date(h.createdAt ?? h.date).toLocaleDateString('fr-FR')} ·{' '}
-                          {h.diagnostic ?? 'Consultation'} · {h.passage?.service?.nom ?? ''}
-                        </Text>
-                        <Text style={styles.itemSous}>{h.motif ?? ''}</Text>
-                        {(h.medicaments ?? []).length > 0 ? (
-                          <Text style={styles.itemSous}>
-                            💊 {(h.medicaments as any[]).map((m) => m.nom).join(', ')}
+                      <TouchableOpacity key={i} style={styles.item} onPress={() => setHistoDetail(h)}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.itemTitre}>
+                            {new Date(h.createdAt ?? h.date).toLocaleDateString('fr-FR')} ·{' '}
+                            <Text style={{ color: colors.primary, textDecorationLine: 'underline' }}>
+                              {h.passage?.numeroOrdre ?? '—'}
+                            </Text>
                           </Text>
-                        ) : null}
-                        {(h.passage?.examensLabo ?? []).length > 0 ? (
                           <Text style={styles.itemSous}>
-                            🔬 {(h.passage.examensLabo as any[])
-                              .map((e) => `${e.libelle} : ${(e.lignes ?? []).map((lg: any) => `${lg.parametre} ${lg.valeur}`).join(', ') || '—'}${e.conclusion ? ` (${e.conclusion})` : ''}`)
-                              .join(' · ')}
+                            {h.passage?.service?.nom ?? ''} · {h.diagnostic ?? h.motif ?? ''}
                           </Text>
-                        ) : null}
-                        {(h.passage?.examensImagerie ?? []).length > 0 ? (
-                          <Text style={styles.itemSous}>
-                            🩻 {(h.passage.examensImagerie as any[])
-                              .map((e) => `${e.libelle}${e.conclusion ? ` : ${e.conclusion}` : ''}`)
-                              .join(' · ')}
-                          </Text>
-                        ) : null}
-                        {(h.passage?.fichesExamenImagerie ?? []).length > 0 ? (
-                          <Text style={styles.itemSous}>
-                            📄 {(h.passage.fichesExamenImagerie as any[]).map((f) => f.libelleType).join(', ')}
-                          </Text>
-                        ) : null}
-                      </View>
+                        </View>
+                        <Text style={{ color: colors.primary, fontWeight: '800' }}>👁️</Text>
+                      </TouchableOpacity>
                     ))}
                   </Card>
                 ) : null}
@@ -1291,6 +1346,16 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   </View>
                 ))}
               </Card>
+            ) : onglet === 'reference' ? (
+              /* ── Onglet Référence / contre-référence ── */
+              <Card>
+                <SectionTitle>📤 Fiche de référence / contre-référence</SectionTitle>
+                {detail?.passage?.typePatient === 'EXTERNE' ? (
+                  <Text style={styles.note}>La fiche de référence ne concerne pas les patients externes.</Text>
+                ) : detail?.passage ? (
+                  <ReferenceFicheMobile passage={detail.passage} />
+                ) : null}
+              </Card>
             ) : (
               /* ── Onglet Certificat d'arrêt ── */
               <Card>
@@ -1298,7 +1363,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                 <Input label="Mme / Mlle / M." value={formCert.civilite} onChangeText={(t) => setFormCert({ ...formCert, civilite: t })} />
                 <Input label="Patient(e)" value={formCert.nomPatient} onChangeText={(t) => setFormCert({ ...formCert, nomPatient: t })} />
                 <Input label="Né(e) le (AAAA-MM-JJ)" value={formCert.dateNaissance} onChangeText={(t) => setFormCert({ ...formCert, dateNaissance: t })} />
-                <Input label="Profession" value={formCert.profession} onChangeText={(t) => setFormCert({ ...formCert, profession: t })} />
+                <ListeCombo label="Profession" value={formCert.profession} options={listes.profession ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFormCert({ ...formCert, profession: v })} />
                 <Input label="Durée de l'arrêt (jours)" value={formCert.dureeJours} onChangeText={(t) => setFormCert({ ...formCert, dureeJours: t })} keyboardType="numeric" />
                 <Input label="Du (AAAA-MM-JJ)" value={formCert.debut} onChangeText={(t) => setFormCert({ ...formCert, debut: t })} />
                 <Input label="Au (AAAA-MM-JJ)" value={formCert.fin} onChangeText={(t) => setFormCert({ ...formCert, fin: t })} />
@@ -1337,7 +1402,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
               />
             </Input>
             <Input label="Nom (saisie libre)" value={medForm.nom} onChangeText={(t) => setMedForm({ ...medForm, nom: t })} placeholder="Ex : Paracétamol 500 mg" />
-            <Input label="Posologie" value={medForm.posologie} onChangeText={(t) => setMedForm({ ...medForm, posologie: t })} placeholder="1 comprimé 3x/j" />
+            <ListeCombo label="Posologie" value={medForm.posologie} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setMedForm({ ...medForm, posologie: v })} />
             <View style={styles.ligne}>
               <View style={styles.ligneItem}>
                 <Input label="Quantité" value={medForm.quantite} onChangeText={(t) => setMedForm({ ...medForm, quantite: t })} placeholder="12" />
@@ -1353,6 +1418,75 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           </View>
         </View>
       ) : null}
+
+      {/* Modale : détail d'une consultation passée (ce que le patient a reçu) */}
+      <Modale
+        visible={histoDetail !== null}
+        titre={`📚 ${histoDetail?.passage?.numeroOrdre ?? '—'} — ${
+          histoDetail ? new Date(histoDetail.createdAt ?? histoDetail.date).toLocaleDateString('fr-FR') : ''
+        }`}
+        onFermer={() => setHistoDetail(null)}
+        actions={<Btn title="Fermer" variant="outline" onPress={() => setHistoDetail(null)} />}
+      >
+        {histoDetail ? (
+          <>
+            {histoDetail.diagnostic ? (
+              <Text style={styles.note}>
+                <Text style={{ fontWeight: '800' }}>Diagnostic : </Text>
+                {histoDetail.diagnostic}
+              </Text>
+            ) : null}
+            {histoDetail.motif ? (
+              <Text style={styles.note}>
+                <Text style={{ fontWeight: '800' }}>Motif : </Text>
+                {histoDetail.motif}
+              </Text>
+            ) : null}
+            {(histoDetail.medicaments ?? []).length > 0 ? (
+              <Text style={styles.note}>
+                <Text style={{ fontWeight: '800' }}>💊 Ordonnance : </Text>
+                {(histoDetail.medicaments as any[])
+                  .map((m) => `${m.nom} — ${m.posologie ?? '—'} (${m.quantite ?? '—'}, ${m.duree ?? '—'})`)
+                  .join('\n• ')}
+              </Text>
+            ) : (
+              <Text style={styles.note}>💊 Aucun médicament prescrit.</Text>
+            )}
+            {(histoDetail.passage?.examensLabo ?? []).map((e: any) => (
+              <View key={`l${e.id}`} style={styles.item}>
+                <Text style={styles.itemTitre}>🔬 {e.libelle}</Text>
+                {(e.lignes ?? []).map((lg: any) => (
+                  <Text key={lg.id} style={styles.itemSous}>
+                    {lg.parametre} : <Text style={{ fontWeight: '800' }}>{lg.valeur}</Text> {lg.unite} · normes {lg.normes ?? '—'}
+                  </Text>
+                ))}
+                {e.conclusion ? (
+                  <Text style={styles.itemSous}>Conclusion : {e.conclusion}</Text>
+                ) : null}
+              </View>
+            ))}
+            {(histoDetail.passage?.examensImagerie ?? []).map((e: any) => (
+              <View key={`i${e.id}`} style={styles.item}>
+                <Text style={styles.itemTitre}>🩻 {e.libelle}</Text>
+                {e.resultat ? <Text style={styles.itemSous}>Résultat : {e.resultat}</Text> : null}
+                {e.conclusion ? <Text style={styles.itemSous}>Conclusion : {e.conclusion}</Text> : null}
+              </View>
+            ))}
+            {(histoDetail.passage?.fichesExamenImagerie ?? []).map((f: any) => (
+              <View key={`f${f.id}`} style={styles.item}>
+                <Text style={styles.itemTitre}>📄 {f.libelleType}</Text>
+                <Text style={styles.ficheTexte}>
+                  {decouperValeurs(f.texte, f.valeurs).map((s, i) => (
+                    <Text key={i} style={s.val ? styles.ficheValeur : undefined}>
+                      {s.t}
+                    </Text>
+                  ))}
+                </Text>
+              </View>
+            ))}
+          </>
+        ) : null}
+      </Modale>
 
       {/* Modale : résultat d'examen (labo / imagerie) */}
       <Modale

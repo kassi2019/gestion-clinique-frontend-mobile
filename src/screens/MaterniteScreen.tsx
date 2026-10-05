@@ -27,6 +27,7 @@ import {
 import ListeCombo from '../components/ListeCombo'
 import ListeSelect from '../components/ListeSelect'
 import DateField from '../components/DateField'
+import ReferenceFicheMobile from '../components/ReferenceFicheMobile'
 
 const METHODES_PF = [
   'Pilule (COC)', 'Pilule (COP)', 'Injectable IM 3 mois', 'Injectable IM 2 mois',
@@ -65,7 +66,7 @@ export default function MaterniteScreen({ navigation }: { navigation: { goBack: 
   const [dossier, setDossier] = useState<any>(null)
   const [cpons, setCpons] = useState<any[]>([])
   const [pfs, setPfs] = useState<any[]>([])
-  const [ongletT, setOngletT] = useState<'cpn' | 'cpon' | 'accouchement' | 'pf' | 'ordonnance' | 'examens'>('cpn')
+  const [ongletT, setOngletT] = useState<'cpn' | 'cpon' | 'accouchement' | 'pf' | 'ordonnance' | 'examens' | 'reference'>('cpn')
   const [saving, setSaving] = useState(false)
 
   // Listes
@@ -948,6 +949,7 @@ export default function MaterniteScreen({ navigation }: { navigation: { goBack: 
             { key: 'pf', label: 'PF' },
             { key: 'ordonnance', label: 'Ordonn.' },
             { key: 'examens', label: 'Examens' },
+            { key: 'reference', label: 'Référence' },
           ]}
         />
       </View>
@@ -1346,6 +1348,18 @@ export default function MaterniteScreen({ navigation }: { navigation: { goBack: 
             )}
           </Card>
         ) : null}
+
+        {/* ── Référence / contre-référence ── */}
+        {ongletT === 'reference' ? (
+          <Card>
+            <SectionTitle>📤 Fiche de référence / contre-référence</SectionTitle>
+            {detail?.passage?.typePatient === 'EXTERNE' ? (
+              <EtatVide texte="La fiche de référence ne concerne pas les patients externes." />
+            ) : detail?.passage ? (
+              <ReferenceFicheMobile passage={detail.passage} />
+            ) : null}
+          </Card>
+        ) : null}
       </ScrollView>
 
       {/* Modale ajout médicament */}
@@ -1373,7 +1387,7 @@ export default function MaterniteScreen({ navigation }: { navigation: { goBack: 
           />
         </Input>
         <Input label="Nom (saisie libre)" value={medNom} onChangeText={setMedNom} />
-        <Input label="Posologie" value={medPoso} onChangeText={setMedPoso} placeholder="Ex : 1 comprimé matin et soir" />
+        <ListeCombo label="Posologie" value={medPoso} options={posologies.map((p: any) => ({ value: p.libelle, label: p.libelle }))} placeholder="— Choisir ou ajouter —" onChange={setMedPoso} />
         <Input label="Quantité" value={medQte} onChangeText={setMedQte} />
         <Input label="Durée" value={medDuree} onChangeText={setMedDuree} placeholder="Ex : 5 jours" />
       </Modale>
