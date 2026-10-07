@@ -173,14 +173,39 @@ export function EtatVide({ texte, image = true }: { texte?: string; image?: bool
 }
 
 /** Bandeau d'écran : bouton retour + titre (remplace les styles dupliqués). */
-export function Bandeau({ titre, onRetour }: { titre: string; onRetour: () => void }) {
+export function Bandeau({
+  titre,
+  onRetour,
+  action,
+}: {
+  titre: string
+  onRetour: () => void
+  /** Élément affiché à droite du titre (ex. bouton de bascule). */
+  action?: React.ReactNode
+}) {
   return (
     <View style={styles.bandeau}>
       <TouchableOpacity style={styles.btnRetour} onPress={onRetour}>
         <Text style={styles.btnRetourTexte}>← Modules</Text>
       </TouchableOpacity>
-      <Text style={styles.titre}>{titre}</Text>
+      <View style={styles.bandeauLigne}>
+        <Text style={[styles.titre, { flex: 1 }]} numberOfLines={1}>
+          {titre}
+        </Text>
+        {action}
+      </View>
     </View>
+  )
+}
+
+/** Bouton « ⚡ » de bascule entre deux postes (Accueil ⇄ Constante, Caisse ⇄ Pharmacie). */
+export function BoutonBascule({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.btnBasculer} onPress={onPress}>
+      <Text style={styles.btnBasculerTexte} numberOfLines={1}>
+        ⚡ {label}
+      </Text>
+    </TouchableOpacity>
   )
 }
 
@@ -390,6 +415,17 @@ const styles = StyleSheet.create({
   etatVideImage: { width: 260, height: 173 },
   etatVideTexte: { textAlign: 'center', color: colors.textMuted, fontSize: 13.5 },
   bandeau: { marginBottom: 12 },
+  bandeauLigne: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  btnBasculer: {
+    backgroundColor: '#fef3c7',
+    borderColor: '#f59e0b',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexShrink: 0,
+  },
+  btnBasculerTexte: { color: '#92400e', fontWeight: '800', fontSize: 12.5 },
   btnRetour: {
     alignSelf: 'flex-start',
     backgroundColor: colors.surface,

@@ -142,13 +142,22 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     setFormCert({
       civilite: pat?.sexe === 'M' ? 'M.' : 'Mme',
       nomPatient: pat ? `${pat.nom} ${pat.prenom}` : '',
-      dateNaissance: pat?.dateNaissance ? String(pat.dateNaissance).slice(0, 10) : '',
+      // Comme le modèle : « Né(e) le ». Âge seul → date déduite (même règle qu'à l'Accueil)
+      dateNaissance: pat?.dateNaissance
+        ? String(pat.dateNaissance).slice(0, 10)
+        : (() => {
+            const n = parseInt(String(pat?.age ?? ''), 10)
+            if (isNaN(n) || n < 0 || n > 150) return ''
+            const d = new Date()
+            d.setFullYear(d.getFullYear() - n)
+            return d.toISOString().slice(0, 10)
+          })(),
       profession: pat?.profession ?? '',
       dureeJours: '7',
       debut: iso(aujourdHui),
       fin: iso(fin),
       medecin: personnel ? `Dr ${personnel.nom} ${personnel.prenom}` : '',
-      lieu: user?.clinique?.adresse || user?.clinique?.nom || 'Bloléquin',
+      lieu: 'Bloléquin', // lieu du modèle officiel du certificat
     })
     chargerCertificats()
   }
@@ -199,6 +208,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   // Taille en cm (165) ou déjà en m (1,65)
   const tailleM = tailleSaisie > 3 ? tailleSaisie / 100 : tailleSaisie
   const imcCalcule = poidsKg && tailleM ? (poidsKg / Math.pow(tailleM, 2)).toFixed(1) : ''
+
+  /** Prix affiché sur l'ordonnance (tests automatiques), ex. 1 500. */
+  const formatPrix = (v: any) => String(Math.round(Number(v))).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
 
   /** Tests cochés qui seront inscrits sur l'ordonnance (règle du serveur). */
   const faitTest = (v: any) => ['positif', 'négatif'].includes(String(v ?? '').toLowerCase())
@@ -391,8 +403,10 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           residenceHabituelle: pc.residenceHabituelle ?? '',
           residenceActuelle: pc.residenceActuelle ?? '',
           hospitalisation: c.hospitalisation ?? false,
+          chirurgie: c.chirurgie ?? (c.antecedentsChirurgicaux ? true : null),
+          prescriptionMedicaments: c.prescriptionMedicaments ?? ((c.medicaments ?? []).length > 0 ? true : null),
           hospitalisationDuree: c.hospitalisationDuree ?? '',
-          issueSortie: c.issueSortie ?? '',
+          issueSortie: c.issueSortie || (c.hospitalisation ? 'HOSPITALISE' : ''),
           conduiteTenir: c.conduiteTenir ?? '',
         })
       } else {
@@ -412,6 +426,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     RESIDENCE: '/residences',
     POSOLOGIE: '/posologies',
     PROFESSION: '/professions',
+    MOTIF: '/motifs',
+    ANTECEDENT: '/antecedents-medicaux',
+    EXAMEN: '/autres-examens',
   }
 
   async function chargerListes() {
@@ -462,7 +479,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         ddr: vider(fiche.ddr),
         traitementAnterieur: vider(fiche.traitementAnterieur),
         antecedentsMedicaux: vider(fiche.antecedentsMedicaux),
-        antecedentsChirurgicaux: vider(fiche.antecedentsChirurgicaux),
+        antecedentsChirurgicaux: fiche.chirurgie === false ? null : vider(fiche.antecedentsChirurgicaux),
         pathologiesAssociees: vider(fiche.pathologiesAssociees),
         typeSuivi: vider(fiche.typeSuivi),
         consultantType: vider(fiche.consultantType),
@@ -490,11 +507,14 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         moDureeMinutes: vider(fiche.moDureeMinutes),
         moDebut: vider(fiche.moDebut),
         moFin: vider(fiche.moFin),
-        hospitalisation: fiche.hospitalisation,
+        // Hospitalisation = issue « Hospitalisé(e) » (une seule issue à la fois)
+        hospitalisation: fiche.issueSortie === 'HOSPITALISE',
+        chirurgie: fiche.chirurgie ?? undefined,
+        prescriptionMedicaments: fiche.prescriptionMedicaments ?? undefined,
         hospitalisationDuree: vider(fiche.hospitalisationDuree),
         typeHospitalisation: vider(fiche.typeHospitalisation),
         hospitalisationDureeJours: fiche.hospitalisationDureeJours ?? undefined,
-        litId: fiche.litId ?? undefined,
+        litId: ['HOSPITALISE', 'MO'].includes(fiche.issueSortie) ? fiche.litId ?? undefined : null,
         issueSortie: vider(fiche.issueSortie),
         conduiteTenir: vider(fiche.conduiteTenir),
         patient: {
@@ -518,6 +538,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       alimenterListe('RESIDENCE', fiche.residenceActuelle)
       alimenterListe('RESIDENCE', fiche.residenceHabituelle)
       alimenterListe('PROFESSION', fiche.profession)
+      alimenterListe('MOTIF', fiche.motif)
+      alimenterListe('ANTECEDENT', fiche.antecedentsMedicaux)
+      alimenterListe('EXAMEN', fiche.autresExamens)
       await chargerDetail(passage.id)
       chargerListes()
     } catch (e: any) {
@@ -951,9 +974,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
               <>
                 <Card>
                   <SectionTitle>Consultation</SectionTitle>
-                  <Input label="Motif" value={fiche.motif ?? ''} onChangeText={(t) => setFiche({ ...fiche, motif: t })} />
+                  <ListeCombo label="Motif de consultation" value={fiche.motif ?? ''} options={listes.motif ?? []} placeholder="— Choisir ou saisir —" onChange={(v) => setFiche({ ...fiche, motif: v })} />
                   <Input label="Examen physique (observation)" value={fiche.observation ?? ''} onChangeText={(t) => setFiche({ ...fiche, observation: t })} multiline />
-                  <ListeCombo label="Diagnostic" value={fiche.diagnostic ?? ''} options={listes.diagnostic ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, diagnostic: v })} />
                   <Text style={styles.label}>Mode d'entrée</Text>
                   <Chips
                     options={['Venue directe', 'Référé(e) centre', 'Référé(e) médecin', 'Autre']}
@@ -975,9 +997,12 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   <Chips options={['Oui', 'Non']} value={fiche.grossesseEnCours == null ? null : fiche.grossesseEnCours ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, grossesseEnCours: v === 'Oui' })} />
                   <Input label="DDR (date des dernières règles)" value={fiche.ddr ?? ''} onChangeText={(t) => setFiche({ ...fiche, ddr: t })} placeholder="AAAA-MM-JJ" />
                   <Input label="Traitement antérieur" value={fiche.traitementAnterieur ?? ''} onChangeText={(t) => setFiche({ ...fiche, traitementAnterieur: t })} />
-                  <Input label="Antécédents médicaux" value={fiche.antecedentsMedicaux ?? ''} onChangeText={(t) => setFiche({ ...fiche, antecedentsMedicaux: t })} />
-                  <Input label="Antécédents chirurgicaux" value={fiche.antecedentsChirurgicaux ?? ''} onChangeText={(t) => setFiche({ ...fiche, antecedentsChirurgicaux: t })} />
-                  <ListeCombo label="Pathologies associées" value={fiche.pathologiesAssociees ?? ''} options={listes.pathologie ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, pathologiesAssociees: v })} />
+                  <ListeCombo label="Antécédents médicaux (maladies)" value={fiche.antecedentsMedicaux ?? ''} options={listes.antecedent ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, antecedentsMedicaux: v })} />
+                  <Text style={styles.label}>Antécédents chirurgicaux</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.chirurgie == null ? null : fiche.chirurgie ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, chirurgie: v === 'Oui' })} />
+                  {fiche.chirurgie === true ? (
+                    <Input label="Préciser" value={fiche.antecedentsChirurgicaux ?? ''} onChangeText={(t) => setFiche({ ...fiche, antecedentsChirurgicaux: t })} placeholder="Intervention, année…" />
+                  ) : null}
                 </Card>
                 <Card>
                   <SectionTitle>Constantes & examen physique</SectionTitle>
@@ -1038,7 +1063,10 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   {testsOrdonnance.length > 0 ? (
                     <Text style={styles.note}>🧾 Inscrits sur l'ordonnance à l'enregistrement : {testsOrdonnance.join(', ')}</Text>
                   ) : null}
-                  <Input label="Autres examens" value={fiche.autresExamens ?? ''} onChangeText={(t) => setFiche({ ...fiche, autresExamens: t })} />
+                  <ListeCombo label="Autres examens" value={fiche.autresExamens ?? ''} options={listes.examen ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, autresExamens: v })} />
+                  {/* Le diagnostic se retient après les examens */}
+                  <ListeCombo label="Diagnostic retenu" value={fiche.diagnostic ?? ''} options={listes.diagnostic ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, diagnostic: v })} />
+                  <ListeCombo label="Pathologies associées" value={fiche.pathologiesAssociees ?? ''} options={listes.pathologie ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, pathologiesAssociees: v })} />
                 </Card>
                 <Card>
                   <SectionTitle>Données administratives</SectionTitle>
@@ -1054,15 +1082,136 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   <Input label="Statut conjugal" value={fiche.statutConjugal ?? ''} onChangeText={(t) => setFiche({ ...fiche, statutConjugal: t })} />
                   <Input label="Type de population" value={fiche.typePopulation ?? ''} onChangeText={(t) => setFiche({ ...fiche, typePopulation: t })} />
                   <Input label="Protection sociale" value={fiche.protectionSociale ?? ''} onChangeText={(t) => setFiche({ ...fiche, protectionSociale: t })} />
-                  <Input label="Populations à risque" value={fiche.populationsRisque ?? ''} onChangeText={(t) => setFiche({ ...fiche, populationsRisque: t })} />
+                  <Text style={styles.label}>Autres populations à haut risque</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.populationsRisque || null} onChange={(v) => setFiche({ ...fiche, populationsRisque: v })} />
                   <ListeCombo label="Résidence habituelle" value={fiche.residenceHabituelle ?? ''} options={listes.residence ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, residenceHabituelle: v })} />
                   <ListeCombo label="Résidence actuelle" value={fiche.residenceActuelle ?? ''} options={listes.residence ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, residenceActuelle: v })} />
                 </Card>
                 <Card>
-                  <SectionTitle>Hospitalisation</SectionTitle>
-                  <Text style={styles.label}>Hospitaliser le patient ?</Text>
-                  <Chips options={['Oui', 'Non']} value={fiche.hospitalisation ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, hospitalisation: v === 'Oui' })} />
-                  {fiche.hospitalisation ? (
+                  <SectionTitle>Prescription de médicaments</SectionTitle>
+                  <Text style={styles.label}>Prescrire des médicaments ?</Text>
+                  <Chips options={['Oui', 'Non']} value={fiche.prescriptionMedicaments == null ? null : fiche.prescriptionMedicaments ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, prescriptionMedicaments: v === 'Oui' })} />
+                  {fiche.prescriptionMedicaments !== true ? (
+                    <Text style={styles.note}>Choisissez « Oui » pour prescrire des médicaments.</Text>
+                  ) : null}
+                  <View
+                    pointerEvents={fiche.prescriptionMedicaments === true ? 'auto' : 'none'}
+                    style={{ opacity: fiche.prescriptionMedicaments === true ? 1 : 0.45 }}
+                  >
+                  {/* Prescription de médicaments intégrée à la fiche (§ cahier des charges) */}
+                  {(consultation?.medicaments ?? []).map((p: any) => (
+                    <View key={p.id} style={styles.ligneMed}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.medNom}>
+                          {p.medicamentNom}
+                          {p.prixUnitaire != null ? ` — ${formatPrix(p.prixUnitaire)} F` : ''}
+                        </Text>
+                        <Text style={styles.medDetail}>
+                          {[p.posologie, p.quantite, p.duree].filter(Boolean).join(' · ') || '—'}
+                        </Text>
+                      </View>
+                      <Btn title="✕" small variant="danger" onPress={() => retirerMedicament(p.id)} />
+                    </View>
+                  ))}
+
+                  {/* Formulaire de prescription intégré à la fiche */}
+                  <Input label="Médicament (catalogue)">
+                    <ListeSelect
+                      value={ficheMedId}
+                      options={optionsMedicaments}
+                      placeholder="— Choisir —"
+                      onChange={(v) => setFicheMedId(v as number | null)}
+                    />
+                  </Input>
+                  <Input
+                    label="Ou saisir librement le nom"
+                    value={ficheMedNom}
+                    onChangeText={setFicheMedNom}
+                    placeholder="Nom du médicament"
+                  />
+                  <ListeCombo label="Posologie" value={ficheMedPoso} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={setFicheMedPoso} />
+                  <View style={styles.ligne}>
+                    <View style={styles.ligneItem}>
+                      <Input label="Quantité" value={ficheMedQte} onChangeText={setFicheMedQte} placeholder="Ex : 2 boîtes" />
+                    </View>
+                    <View style={styles.ligneItem}>
+                      <Input label="Durée" value={ficheMedDuree} onChangeText={setFicheMedDuree} placeholder="Ex : 5 j" />
+                    </View>
+                  </View>
+                  <Btn
+                    title="＋ Ajouter"
+                    small
+                    onPress={ajouterMedicamentFiche}
+                    loading={ficheMedEnCours}
+                  />
+                  </View>
+                </Card>
+                <Card>
+                  <SectionTitle>Issue de la consultation</SectionTitle>
+                  <Chips
+                    options={['Retour à domicile', 'Hospitalisé(e)', 'M.O.', 'Référé(e) en interne', 'Référé(e) externe']}
+                    value={
+                      fiche.issueSortie === 'DOMICILE'
+                        ? 'Retour à domicile'
+                        : fiche.issueSortie === 'HOSPITALISE'
+                        ? 'Hospitalisé(e)'
+                        : fiche.issueSortie === 'MO'
+                          ? 'M.O.'
+                          : fiche.issueSortie === 'REFERE_INTERNE'
+                            ? 'Référé(e) en interne'
+                            : fiche.issueSortie === 'REFERE_EXTERNE'
+                              ? 'Référé(e) externe'
+                              : null
+                    }
+                    onChange={(v) =>
+                      setFiche({
+                        ...fiche,
+                        issueSortie:
+                          v === 'Retour à domicile'
+                            ? 'DOMICILE'
+                            : v === 'Hospitalisé(e)'
+                            ? 'HOSPITALISE'
+                            : v === 'M.O.'
+                              ? 'MO'
+                              : v === 'Référé(e) en interne'
+                                ? 'REFERE_INTERNE'
+                                : 'REFERE_EXTERNE',
+                      })
+                    }
+                  />
+                  {fiche.issueSortie === 'MO' ? (
+                    <>
+                      <View style={styles.ligne}>
+                        <View style={styles.ligneItem}>
+                          <Input
+                            label="Durée M.O. (heures)"
+                            value={fiche.moDureeHeures ?? ''}
+                            onChangeText={(t) => setFiche({ ...fiche, moDureeHeures: t })}
+                            keyboardType="numeric"
+                          />
+                        </View>
+                        <View style={styles.ligneItem}>
+                          <Input
+                            label="Durée M.O. (minutes)"
+                            value={fiche.moDureeMinutes ?? ''}
+                            onChangeText={(t) => setFiche({ ...fiche, moDureeMinutes: t })}
+                            keyboardType="numeric"
+                          />
+                        </View>
+                      </View>
+                      <Input label="Début M.O." value={fiche.moDebut ?? ''} onChangeText={(t) => setFiche({ ...fiche, moDebut: t })} placeholder="AAAA-MM-JJ HH:MM" />
+                      <Input label="Fin M.O." value={fiche.moFin ?? ''} onChangeText={(t) => setFiche({ ...fiche, moFin: t })} placeholder="AAAA-MM-JJ HH:MM" />
+                      <Input label="Chambre / lit">
+                        <ListeSelect
+                          value={fiche.litId ?? null}
+                          options={lits.map((l) => ({ value: l.id, label: l.label }))}
+                          placeholder="— Choisir un lit libre —"
+                          onChange={(v) => setFiche({ ...fiche, litId: v as number })}
+                        />
+                      </Input>
+                    </>
+                  ) : null}
+                  {fiche.issueSortie === 'HOSPITALISE' ? (
                     <>
                       <Text style={styles.label}>Type d'hospitalisation</Text>
                       <Chips
@@ -1114,103 +1263,6 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                       </Text>
                     </>
                   ) : null}
-                  {/* Prescription de médicaments intégrée à la fiche (§ cahier des charges) */}
-                  {(consultation?.medicaments ?? []).map((p: any) => (
-                    <View key={p.id} style={styles.ligneMed}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.medNom}>{p.medicamentNom}</Text>
-                        <Text style={styles.medDetail}>
-                          {[p.posologie, p.quantite, p.duree].filter(Boolean).join(' · ') || '—'}
-                        </Text>
-                      </View>
-                      <Btn title="✕" small variant="danger" onPress={() => retirerMedicament(p.id)} />
-                    </View>
-                  ))}
-
-                  {/* Formulaire de prescription intégré à la fiche */}
-                  <Input label="Médicament (catalogue)">
-                    <ListeSelect
-                      value={ficheMedId}
-                      options={optionsMedicaments}
-                      placeholder="— Choisir —"
-                      onChange={(v) => setFicheMedId(v as number | null)}
-                    />
-                  </Input>
-                  <Input
-                    label="Ou saisir librement le nom"
-                    value={ficheMedNom}
-                    onChangeText={setFicheMedNom}
-                    placeholder="Nom du médicament"
-                  />
-                  <ListeCombo label="Posologie" value={ficheMedPoso} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={setFicheMedPoso} />
-                  <View style={styles.ligne}>
-                    <View style={styles.ligneItem}>
-                      <Input label="Quantité" value={ficheMedQte} onChangeText={setFicheMedQte} placeholder="Ex : 2 boîtes" />
-                    </View>
-                    <View style={styles.ligneItem}>
-                      <Input label="Durée" value={ficheMedDuree} onChangeText={setFicheMedDuree} placeholder="Ex : 5 j" />
-                    </View>
-                  </View>
-                  <Btn
-                    title="＋ Ajouter"
-                    small
-                    onPress={ajouterMedicamentFiche}
-                    loading={ficheMedEnCours}
-                  />
-                </Card>
-                <Card>
-                  <SectionTitle>Issue de la consultation</SectionTitle>
-                  <Chips
-                    options={['Hospitalisé(e)', 'M.O.', 'Référé(e) en interne', 'Référé(e) externe']}
-                    value={
-                      fiche.issueSortie === 'HOSPITALISE'
-                        ? 'Hospitalisé(e)'
-                        : fiche.issueSortie === 'MO'
-                          ? 'M.O.'
-                          : fiche.issueSortie === 'REFERE_INTERNE'
-                            ? 'Référé(e) en interne'
-                            : fiche.issueSortie === 'REFERE_EXTERNE'
-                              ? 'Référé(e) externe'
-                              : null
-                    }
-                    onChange={(v) =>
-                      setFiche({
-                        ...fiche,
-                        issueSortie:
-                          v === 'Hospitalisé(e)'
-                            ? 'HOSPITALISE'
-                            : v === 'M.O.'
-                              ? 'MO'
-                              : v === 'Référé(e) en interne'
-                                ? 'REFERE_INTERNE'
-                                : 'REFERE_EXTERNE',
-                      })
-                    }
-                  />
-                  {fiche.issueSortie === 'MO' ? (
-                    <>
-                      <View style={styles.ligne}>
-                        <View style={styles.ligneItem}>
-                          <Input
-                            label="Durée M.O. (heures)"
-                            value={fiche.moDureeHeures ?? ''}
-                            onChangeText={(t) => setFiche({ ...fiche, moDureeHeures: t })}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                        <View style={styles.ligneItem}>
-                          <Input
-                            label="Durée M.O. (minutes)"
-                            value={fiche.moDureeMinutes ?? ''}
-                            onChangeText={(t) => setFiche({ ...fiche, moDureeMinutes: t })}
-                            keyboardType="numeric"
-                          />
-                        </View>
-                      </View>
-                      <Input label="Début M.O." value={fiche.moDebut ?? ''} onChangeText={(t) => setFiche({ ...fiche, moDebut: t })} placeholder="AAAA-MM-JJ HH:MM" />
-                      <Input label="Fin M.O." value={fiche.moFin ?? ''} onChangeText={(t) => setFiche({ ...fiche, moFin: t })} placeholder="AAAA-MM-JJ HH:MM" />
-                    </>
-                  ) : null}
                 </Card>
                 {historique.length > 0 ? (
                   <Card>
@@ -1252,6 +1304,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                             <Text style={styles.medNom}>
                               {p.medicamentNom}
                               {p.forme ? ` (${p.forme})` : ''}
+                              {p.prixUnitaire != null ? ` — ${formatPrix(p.prixUnitaire)} F` : ''}
                             </Text>
                             <Text style={styles.medDetail}>
                               {[p.posologie, p.quantite, p.duree].filter(Boolean).join(' · ') || '—'}

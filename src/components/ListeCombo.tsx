@@ -108,8 +108,14 @@ export default function ListeCombo({
               style={styles.liste}
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
-                <Pressable style={styles.option} onPress={() => choisir(item.label)}>
-                  <Text style={styles.optionTexte} numberOfLines={2}>{item.label}</Text>
+                <Pressable
+                  style={({ pressed }) => [styles.option, item.label === value && styles.optionChoisie, pressed && styles.optionPressee]}
+                  onPress={() => choisir(item.label)}
+                >
+                  <Text style={[styles.optionTexte, item.label === value && styles.optionTexteChoisi]} numberOfLines={2}>
+                    {item.label === value ? '✓  ' : ''}
+                    {item.label}
+                  </Text>
                 </Pressable>
               )}
               ListEmptyComponent={
@@ -156,7 +162,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 8,
     borderColor: colors.borderChamp,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderRadius: radius,
     paddingHorizontal: 12,
     paddingVertical: 11,
@@ -165,7 +171,7 @@ const styles = StyleSheet.create({
   },
   vide: { borderStyle: 'dashed' },
   champTexte: { flex: 1, fontSize: 14.5, color: colors.text },
-  fleche: { fontSize: 13, color: colors.textMuted },
+  fleche: { fontSize: 15, color: colors.primary, fontWeight: '800' },
   voile: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.5)',
@@ -190,14 +196,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     marginBottom: 8,
   },
-  liste: { maxHeight: 260 },
+  liste: { maxHeight: 400, flexShrink: 1 },
   option: {
     paddingVertical: 11,
     paddingHorizontal: 4,
     borderBottomColor: colors.border,
     borderBottomWidth: 1,
   },
-  optionTexte: { fontSize: 14.5, color: colors.text },
+  optionTexte: { fontSize: 15, color: colors.text },
+  optionChoisie: { backgroundColor: '#e6f4f1' },
+  optionPressee: { backgroundColor: '#d5eee9' },
+  optionTexteChoisi: { fontWeight: '800', color: colors.primaryDarker },
   videTexte: { color: colors.textMuted, paddingVertical: 12, fontStyle: 'italic' },
   libreBloc: {
     marginTop: 10,

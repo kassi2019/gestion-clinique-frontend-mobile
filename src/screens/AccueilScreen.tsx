@@ -126,7 +126,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   /** Âge saisi → date de naissance renseignée automatiquement (et inversement). */
   function changerAge(v: string) {
     setAge(v)
-    if (v && !dateNaissance) setDateNaissance(naissanceDepuisAge(v))
+    // Mise à jour à chaque frappe (« 3 » puis « 35 ») tant que la date ne correspond pas à l'âge
+    if (v && ageDepuisNaissance(dateNaissance) !== v) setDateNaissance(naissanceDepuisAge(v))
   }
 
   function changerDateNaissance(v: string) {
@@ -1525,10 +1526,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
               label="Âge"
               value={modifForm.age}
               onChangeText={(t) => {
-                setModifForm({ ...modifForm, age: t })
-                if (t && !modifForm.dateNaissance) {
-                  setModifForm({ ...modifForm, age: t, dateNaissance: naissanceDepuisAge(t) })
-                }
+                const recalcul = t && ageDepuisNaissance(modifForm.dateNaissance ?? '') !== t
+                setModifForm({ ...modifForm, age: t, ...(recalcul ? { dateNaissance: naissanceDepuisAge(t) } : {}) })
               }}
               keyboardType="numeric"
             />

@@ -23,6 +23,7 @@ import {
   Screen,
   SectionTitle,
   EtatVide,
+  BoutonBascule,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 
@@ -102,8 +103,15 @@ function aujourdhui(): string {
   return `${d.getFullYear()}-${m}-${j}`
 }
 
-export default function CaisseScreen({ navigation }: { navigation: { goBack: () => void } }) {
+export default function CaisseScreen({
+  navigation,
+}: {
+  navigation: { goBack: () => void; replace: (ecran: string) => void }
+}) {
   const { user } = useAuth()
+  // Bascule Caisse ⇄ Pharmacie (comme Accueil ⇄ Constante) : agents Caisse/Pharmacie et administrateur
+  const peutBasculer =
+    ['CAI', 'PHA'].includes(user?.personnel?.service?.code ?? '') || user?.role?.code === 'ADMINISTRATEUR'
   const cliniqueId = user?.clinique?.id ?? 1
   const estAdmin = user?.role?.code === 'ADMINISTRATEUR'
 
@@ -443,7 +451,11 @@ export default function CaisseScreen({ navigation }: { navigation: { goBack: () 
   // ─── Rendu ───────────────────────────────────────────────────
   return (
     <Screen>
-      <Bandeau titre="💰 Caisse" onRetour={() => navigation.goBack()} />
+      <Bandeau
+        titre="💰 Caisse"
+        onRetour={() => navigation.goBack()}
+        action={peutBasculer ? <BoutonBascule label="Pharmacie" onPress={() => navigation.replace('Pharmacie')} /> : null}
+      />
 
       {!passage ? (
         <>

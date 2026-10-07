@@ -13,6 +13,7 @@ import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
 import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Onglets, Screen, SectionTitle,
   EtatVide,
+  BoutonBascule,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
 import DateField from '../components/DateField'
@@ -30,8 +31,15 @@ type PassageRef = {
   consultations?: any[]
 }
 
-export default function PharmacieScreen({ navigation }: { navigation: { goBack: () => void } }) {
+export default function PharmacieScreen({
+  navigation,
+}: {
+  navigation: { goBack: () => void; replace: (ecran: string) => void }
+}) {
   const { user } = useAuth()
+  // Bascule Pharmacie ⇄ Caisse (comme Accueil ⇄ Constante) : agents Caisse/Pharmacie et administrateur
+  const peutBasculer =
+    ['CAI', 'PHA'].includes(user?.personnel?.service?.code ?? '') || user?.role?.code === 'ADMINISTRATEUR'
   const cliniqueId = user?.clinique?.id ?? 1
 
   const [recherche, setRecherche] = useState('')
@@ -543,7 +551,12 @@ export default function PharmacieScreen({ navigation }: { navigation: { goBack: 
         <TouchableOpacity style={styles.btnRetour} onPress={() => navigation.goBack()}>
           <Text style={styles.btnRetourTexte}>← Modules</Text>
         </TouchableOpacity>
-        <Text style={styles.titre}>💊 Pharmacie</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={[styles.titre, { flex: 1 }]} numberOfLines={1}>
+            💊 Pharmacie
+          </Text>
+          {peutBasculer ? <BoutonBascule label="Caisse" onPress={() => navigation.replace('Caisse')} /> : null}
+        </View>
         {!ordonnance ? (
           <TextInput
             style={styles.recherche}

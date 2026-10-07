@@ -91,13 +91,16 @@ export default function ListeSelect({
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
                 <Pressable
-                  style={styles.item}
+                  style={({ pressed }) => [styles.item, item.value === value && styles.itemChoisi, pressed && styles.itemPresse]}
                   onPress={() => {
                     onChange(item.value)
                     setOuvert(false)
                   }}
                 >
-                  <Text style={styles.itemTexte}>{item.label}</Text>
+                  <Text style={[styles.itemTexte, item.value === value && styles.itemTexteChoisi]}>
+                    {item.value === value ? '✓  ' : ''}
+                    {item.label}
+                  </Text>
                 </Pressable>
               )}
               ListEmptyComponent={<Text style={styles.vide}>Aucun résultat</Text>}
@@ -127,8 +130,8 @@ const styles = StyleSheet.create({
   },
   disabled: { opacity: 0.5 },
   valeur: { fontSize: 15, color: colors.text, flex: 1 },
-  placeholder: { fontSize: 15, color: '#94a3b8', flex: 1 },
-  fleche: { fontSize: 14, color: colors.textMuted },
+  placeholder: { fontSize: 15, color: '#64748b', flex: 1 },
+  fleche: { fontSize: 15, color: colors.primary, fontWeight: '800' },
   voile: {
     flex: 1,
     backgroundColor: 'rgba(15,23,42,0.5)',
@@ -150,7 +153,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginBottom: 8,
   },
-  liste: { flexGrow: 0 },
+  liste: { flexGrow: 0, flexShrink: 1 },
   item: {
     paddingVertical: 12,
     paddingHorizontal: 4,
@@ -158,6 +161,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
   },
   itemTexte: { fontSize: 15, color: colors.text },
+  itemChoisi: { backgroundColor: '#e6f4f1' },
+  itemPresse: { backgroundColor: '#d5eee9' },
+  itemTexteChoisi: { fontWeight: '800', color: colors.primaryDarker },
   vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 16 },
   fermer: {
     marginTop: 10,
