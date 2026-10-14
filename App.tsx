@@ -16,6 +16,7 @@ import HospitalisationScreen from './src/screens/HospitalisationScreen'
 import StatistiquesScreen from './src/screens/StatistiquesScreen'
 import MaterniteScreen from './src/screens/MaterniteScreen'
 import SoinsScreen from './src/screens/SoinsScreen'
+import FinancesScreen from './src/screens/FinancesScreen'
 
 const Stack = createNativeStackNavigator()
 
@@ -41,6 +42,7 @@ function Navigation() {
           <Stack.Screen name="Statistiques" component={StatistiquesScreen} />
           <Stack.Screen name="Maternite" component={MaterniteScreen} />
           <Stack.Screen name="Soins" component={SoinsScreen} />
+          <Stack.Screen name="Finances" component={FinancesScreen} />
         </>
       )}
     </Stack.Navigator>

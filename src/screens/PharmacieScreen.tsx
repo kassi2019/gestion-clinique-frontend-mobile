@@ -52,7 +52,15 @@ export default function PharmacieScreen({
   const [recu, setRecu] = useState<string | null>(null)
 
   // ── Stocks / Consommables (onglets web) ──
-  const [ongletPharma, setOngletPharma] = useState<'ordonnances' | 'stocks' | 'financier'>('ordonnances')
+  const [ongletPharma, setOngletPharma] = useState<'ordonnances' | 'credits' | 'stocks' | 'financier'>('ordonnances')
+  // Crédit / cas social : motif demandé avant la remise des médicaments
+  const [modaleReglement, setModaleReglement] = useState<{ type: 'CREDIT' | 'CAS_SOCIAL'; motif: string } | null>(null)
+  // Crédits non réglés et cas sociaux de la pharmacie
+  const [creditsPharma, setCreditsPharma] = useState<{ credits: any[]; casSociaux: any[]; totalCredits: number }>({
+    credits: [],
+    casSociaux: [],
+    totalCredits: 0,
+  })
   const [sousOnglet, setSousOnglet] = useState<'entree' | 'inventaire' | 'mouvements'>('entree')
   const [mouvementMedId, setMouvementMedId] = useState<number | string | null>(null)
   const [tousLots, setTousLots] = useState<any[]>([])
@@ -242,6 +250,9 @@ export default function PharmacieScreen({
     }
     if (ongletPharma === 'ordonnances') {
       chargerDispensees()
+    }
+    if (ongletPharma === 'credits') {
+      chargerCreditsPharma()
     }
     if (ongletPharma === 'financier') {
       chargerFinancier()
@@ -502,43 +513,115 @@ export default function PharmacieScreen({
     0,
   )
 
-  async function dispenser() {
-    if (!ordonnance) return
-    const lignes = (ordonnance.prescriptions ?? [])
+  // Part prise en charge par l'assurance du patient (taux « médicaments » de sa formule)
+  const tauxAssurance = Number(ordonnance?.assurance?.taux ?? 0)
+  const partAssurance = Math.round((total * tauxAssurance) / 100)
+
+  async function chargerCreditsPharma() {
+    try {
+      const { data } = await http.get('/pharmacie/credits', { params: { cliniqueId } })
+      setCreditsPharma(data)
+    } catch {
+      setCreditsPharma({ credits: [], casSociaux: [], totalCredits: 0 })
+    }
+  }
+
+  function encaisserCredit(c: any) {
+    const regler = async (mode: string) => {
+      try {
+        await http.post(`/pharmacie/paiements/${c.id}/regler`, { modePaiement: mode })
+        Alert.alert('✅ Crédit encaissé', `${c.numeroRecu} — ${Number(c.montantPatient).toLocaleString('fr-FR')} FCFA`)
+        chargerCreditsPharma()
+      } catch (e: any) {
+        Alert.alert('Erreur', e.response?.data?.message ?? 'Encaissement impossible.')
+      }
+    }
+    Alert.alert(
+      `Encaisser ${Number(c.montantPatient).toLocaleString('fr-FR')} FCFA ?`,
+      `${c.patient.nom} ${c.patient.prenom} — reçu ${c.numeroRecu}\nMode de paiement :`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: '💵 Espèces', onPress: () => regler('ESPECES') },
+        { text: '📱 Mobile Money', onPress: () => regler('MOBILE_MONEY') },
+      ],
+    )
+  }
+
+  /** Lignes à délivrer (null si aucune quantité saisie). */
+  function lignesADelivrer() {
+    const lignes = (ordonnance?.prescriptions ?? [])
       .filter((p: any) => Number(quantites[p.id]) > 0)
       .map((p: any) => ({ prescriptionId: p.id, quantiteDelivree: Number(quantites[p.id]) }))
     if (lignes.length === 0) {
       Alert.alert('Pharmacie', 'Saisissez au moins une quantité.')
+      return null
+    }
+    return lignes
+  }
+
+  /** Crédit (payé plus tard) ou cas social (non remboursable) : motif obligatoire. */
+  function ouvrirReglementSansPaiement(type: 'CREDIT' | 'CAS_SOCIAL') {
+    if (!lignesADelivrer()) return
+    setModaleReglement({ type, motif: type === 'CAS_SOCIAL' ? 'Patient indigent' : 'Argent pas encore disponible' })
+  }
+  async function confirmerReglementSansPaiement() {
+    if (!modaleReglement) return
+    if (!modaleReglement.motif.trim()) {
+      Alert.alert('Motif', 'Indiquez le motif.')
       return
     }
-    Alert.alert('Dispenser & encaisser ?', `Total : ${total.toLocaleString('fr-FR')} FCFA (${modePaiement})`, [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Confirmer',
-        onPress: async () => {
-          setEnCours(true)
-          try {
-            const d = await http.post(`/pharmacie/ordonnances/${ordonnance.ordonnance.id}/dispenser`, { lignes })
-            const dispensationId = d.data.id ?? d.data.dispensation?.id
-            const pay = await http.post(`/pharmacie/dispensations/${dispensationId}/payer`, { modePaiement })
-            Alert.alert('✅ Dispensation encaissée', `Reçu ${pay.data.numeroRecu ?? ''}`)
-            // Impression déjà déclenchée par le backend (autoPrint) : utiliser
-            // la réponse pour l'aperçu, sans second POST (double impression).
-            if (pay.data.impression?.contenu) {
-              setRecu(pay.data.impression.contenu)
-            } else {
-              setRecu(`Reçu ${pay.data.numeroRecu ?? ''} enregistré.`)
-            }
-            setOrdonnance(null)
-          } catch (e: any) {
-            const msg = e.response?.data?.message
-            Alert.alert('Erreur', Array.isArray(msg) ? msg.join('\n') : msg ?? 'Dispensation impossible.')
-          } finally {
-            setEnCours(false)
-          }
-        },
-      },
-    ])
+    const reglement = { type: modaleReglement.type, motif: modaleReglement.motif.trim() }
+    setModaleReglement(null)
+    await executerDispensation(reglement)
+  }
+
+  function dispenser() {
+    if (!ordonnance || !lignesADelivrer()) return
+    const net = total - partAssurance
+    Alert.alert(
+      'Dispenser & encaisser ?',
+      partAssurance > 0
+        ? `Total : ${total.toLocaleString('fr-FR')} FCFA — assurance ${tauxAssurance} % : ${partAssurance.toLocaleString('fr-FR')} FCFA\nÀ encaisser : ${net.toLocaleString('fr-FR')} FCFA (${modePaiement})`
+        : `Total : ${total.toLocaleString('fr-FR')} FCFA (${modePaiement})`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        { text: 'Confirmer', onPress: () => executerDispensation() },
+      ],
+    )
+  }
+
+  async function executerDispensation(reglement?: { type: 'CREDIT' | 'CAS_SOCIAL'; motif: string }) {
+    if (!ordonnance) return
+    const lignes = lignesADelivrer()
+    if (!lignes) return
+    setEnCours(true)
+    try {
+      const d = await http.post(`/pharmacie/ordonnances/${ordonnance.ordonnance.id}/dispenser`, { lignes })
+      const dispensationId = d.data.id ?? d.data.dispensation?.id
+      const pay = await http.post(
+        `/pharmacie/dispensations/${dispensationId}/payer`,
+        reglement ? { modePaiement, type: reglement.type, motif: reglement.motif } : { modePaiement },
+      )
+      const numero = pay.data.paiement?.numeroRecu ?? pay.data.numeroRecu ?? ''
+      Alert.alert(
+        reglement ? (reglement.type === 'CAS_SOCIAL' ? '✅ Cas social enregistré' : '✅ Crédit enregistré') : '✅ Dispensation encaissée',
+        `Reçu ${numero}`,
+      )
+      chargerCreditsPharma()
+      // Impression déjà déclenchée par le backend (autoPrint) : utiliser
+      // la réponse pour l'aperçu, sans second POST (double impression).
+      if (pay.data.impression?.contenu) {
+        setRecu(pay.data.impression.contenu)
+      } else {
+        setRecu(`Reçu ${numero} enregistré.`)
+      }
+      setOrdonnance(null)
+    } catch (e: any) {
+      const msg = e.response?.data?.message
+      Alert.alert('Erreur', Array.isArray(msg) ? msg.join('\n') : msg ?? 'Dispensation impossible.')
+    } finally {
+      setEnCours(false)
+    }
   }
 
   return (
@@ -598,13 +681,65 @@ export default function PharmacieScreen({
             onChange={(k) => {
               setOngletPharma(k as typeof ongletPharma)
               if (k === 'financier') chargerFinancier()
+              if (k === 'credits') chargerCreditsPharma()
             }}
             tabs={[
               { key: 'ordonnances', label: 'Ordonnances', count: dispensees.length },
+              { key: 'credits', label: 'Crédits', count: creditsPharma.credits.length },
               { key: 'stocks', label: 'Stocks', count: alertes.stockBas.length },
               { key: 'financier', label: 'Financier' },
             ]}
           />
+
+          {ongletPharma === 'credits' ? (
+            <>
+              <Card>
+                <SectionTitle>🎫 Crédits en cours</SectionTitle>
+                {creditsPharma.credits.length === 0 ? (
+                  <Text style={styles.creditVide}>Aucun crédit en cours. ✅</Text>
+                ) : (
+                  <Text style={styles.creditVide}>
+                    Total à encaisser : {creditsPharma.totalCredits.toLocaleString('fr-FR')} FCFA
+                  </Text>
+                )}
+                {creditsPharma.credits.map((c) => (
+                  <View key={c.id} style={styles.creditLigne}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.creditNom}>
+                        {c.patient.nom} {c.patient.prenom}
+                      </Text>
+                      <Text style={styles.creditDetail}>
+                        {c.numeroRecu} · {c.numeroOrdonnance ?? '—'} · {new Date(c.createdAt).toLocaleDateString('fr-FR')}
+                      </Text>
+                      {c.motif ? <Text style={styles.creditDetail}>Motif : {c.motif}</Text> : null}
+                      {c.patient.telephone ? <Text style={styles.creditDetail}>📞 {c.patient.telephone}</Text> : null}
+                      <Text style={styles.creditMontant}>Reste dû : {Number(c.montantPatient).toLocaleString('fr-FR')} FCFA</Text>
+                    </View>
+                    <Btn title="💵 Encaisser" small onPress={() => encaisserCredit(c)} />
+                  </View>
+                ))}
+              </Card>
+              <Card>
+                <SectionTitle>🤝 Cas sociaux pris en charge</SectionTitle>
+                {creditsPharma.casSociaux.length === 0 ? <Text style={styles.creditVide}>Aucun cas social enregistré.</Text> : null}
+                {creditsPharma.casSociaux.map((c) => (
+                  <View key={c.id} style={styles.creditLigne}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.creditNom}>
+                        {c.patient.nom} {c.patient.prenom}
+                      </Text>
+                      <Text style={styles.creditDetail}>
+                        {c.numeroRecu} · {new Date(c.createdAt).toLocaleDateString('fr-FR')} · {c.motif ?? ''}
+                      </Text>
+                      <Text style={styles.creditDetail}>
+                        Pris en charge : {(Number(c.montantTotal) - Number(c.montantAssurance)).toLocaleString('fr-FR')} FCFA
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </Card>
+            </>
+          ) : null}
 
           {ongletPharma === 'financier' ? (
             <>
@@ -937,18 +1072,72 @@ export default function PharmacieScreen({
           </Card>
 
           <Card>
+            {ordonnance.assurance ? (
+              <View style={styles.assurance}>
+                <Text style={styles.assuranceTexte}>
+                  🛡️ {ordonnance.assurance.assurance} — {ordonnance.assurance.formule}
+                  {ordonnance.assurance.numeroAssure ? ` · N° ${ordonnance.assurance.numeroAssure}` : ''}
+                </Text>
+                <Text style={styles.assuranceTexte}>
+                  {tauxAssurance > 0
+                    ? `Médicaments couverts à ${tauxAssurance} %`
+                    : 'Aucun taux « médicaments » pour cette formule : le patient paie 100 %'}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.recap}>
               <Text style={styles.recapTotal}>Total : {total.toLocaleString('fr-FR')} FCFA</Text>
+              {partAssurance > 0 ? (
+                <>
+                  <Text style={styles.recapAssurance}>
+                    Part assurance ({tauxAssurance} %) : − {partAssurance.toLocaleString('fr-FR')} FCFA
+                  </Text>
+                  <Text style={styles.recapTotal}>Reste à payer : {(total - partAssurance).toLocaleString('fr-FR')} FCFA</Text>
+                </>
+              ) : null}
             </View>
             <Input label="Mode de paiement">
               <ListeSelect value={modePaiement} options={MODES} onChange={(v) => setModePaiement(v as string)} />
             </Input>
             <Btn title="💊 Dispenser & encaisser" onPress={dispenser} loading={enCours} disabled={total === 0} />
+            <View style={styles.reglementsSpeciaux}>
+              <View style={{ flex: 1 }}>
+                <Btn title="🎫 Crédit" variant="outline" onPress={() => ouvrirReglementSansPaiement('CREDIT')} disabled={total === 0 || enCours} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Btn title="🤝 Cas social" variant="outline" onPress={() => ouvrirReglementSansPaiement('CAS_SOCIAL')} disabled={total === 0 || enCours} />
+              </View>
+            </View>
           </Card>
 
           {recu ? <ApercuTexte contenu={recu} /> : null}
         </ScrollView>
       )}
+
+      {/* Modale : crédit / cas social (motif obligatoire) */}
+      <Modale
+        visible={modaleReglement !== null}
+        titre={modaleReglement?.type === 'CAS_SOCIAL' ? '🤝 Cas social' : '🎫 Crédit pharmacie'}
+        sousTitre={
+          modaleReglement?.type === 'CAS_SOCIAL'
+            ? 'Les médicaments sont remis et pris en charge par la clinique (non remboursable).'
+            : 'Les médicaments sont remis maintenant. Le patient paiera sa part plus tard.'
+        }
+        centree
+        onFermer={() => setModaleReglement(null)}
+        actions={
+          <>
+            <Btn title="Annuler" small variant="outline" onPress={() => setModaleReglement(null)} />
+            <Btn title="Confirmer" small onPress={confirmerReglementSansPaiement} loading={enCours} />
+          </>
+        }
+      >
+        <Input
+          label="Motif *"
+          value={modaleReglement?.motif ?? ''}
+          onChangeText={(t) => modaleReglement && setModaleReglement({ ...modaleReglement, motif: t })}
+        />
+      </Modale>
 
       {/* Modale : entrée de stock */}
       <Modale
@@ -1173,6 +1362,15 @@ export default function PharmacieScreen({
 }
 
 const styles = StyleSheet.create({
+  assurance: { padding: 10, marginBottom: 10, backgroundColor: '#eff6ff', borderColor: '#bfdbfe', borderWidth: 1, borderRadius: 10 },
+  assuranceTexte: { fontSize: 12.5, color: '#1e3a8a' },
+  recapAssurance: { fontSize: 13, color: '#1d4ed8', marginTop: 2 },
+  reglementsSpeciaux: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  creditVide: { fontSize: 13, color: colors.textMuted, marginBottom: 6 },
+  creditLigne: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, borderTopColor: colors.border, borderTopWidth: 1 },
+  creditNom: { fontSize: 14, fontWeight: '800', color: colors.text },
+  creditDetail: { fontSize: 12, color: colors.textMuted },
+  creditMontant: { fontSize: 13, fontWeight: '800', color: '#b45309', marginTop: 2 },
   statutStock: {
     alignSelf: 'flex-start',
     borderRadius: 999,

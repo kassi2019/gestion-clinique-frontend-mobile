@@ -33,7 +33,15 @@
       }
     },
     "plugins": [
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "L'application accède à vos photos pour joindre le résultat d'un examen au dossier du patient.",
+          "cameraPermission": "L'application utilise l'appareil photo pour photographier le résultat d'un examen.",
+          "microphonePermission": false
+        }
+      ]
     ]
   }
 }

@@ -1,7 +1,9 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react'
+import * as ImagePicker from 'expo-image-picker'
 import {
   Alert,
   FlatList,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,10 +14,11 @@ import {
 import http from '../api/http'
 import { useAuth } from '../context/AuthContext'
 import { colors } from '../theme'
-import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Screen, SectionTitle,
+import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Onglets, Screen, SectionTitle,
   EtatVide,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
+import DateField from '../components/DateField'
 import ListeCombo from '../components/ListeCombo'
 import ReferenceFicheMobile from '../components/ReferenceFicheMobile'
 
@@ -659,6 +662,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     try {
       await http.post(`/consultations/${consultation.id}/medicaments`, {
         medicamentId: medForm.medicamentId ?? undefined,
+        ordonnanceId: ordonnanceActive?.statut === 'EN_ATTENTE' ? ordonnanceActive.id : undefined,
         nom: medForm.nom.trim() || undefined,
         posologie: medForm.posologie || undefined,
         quantite: medForm.quantite || undefined,
@@ -688,7 +692,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   async function imprimerOrdonnance() {
     if (!consultation) return
     try {
-      const { data } = await http.post(`/impression/consultations/${consultation.id}`)
+      const { data } = await http.post(`/impression/consultations/${consultation.id}`, null, {
+        params: { ordonnanceId: ordonnanceActive?.id ?? undefined },
+      })
       setOrdoApercu(data.contenu ?? 'Ordonnance imprimée au poste.')
       Alert.alert('🖨️ Ordonnance', data.ok ? 'Envoyée à l\'imprimante du poste.' : 'Impression non configurée — aperçu affiché.')
     } catch {
@@ -723,6 +729,199 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
   /** Détail d'une consultation passée (modale : ordonnance, examens, résultats). */
   const [histoDetail, setHistoDetail] = useState<any>(null)
+  const [histoOnglet, setHistoOnglet] = useState<'consultation' | 'labo' | 'imagerie' | 'ordonnance' | 'externes'>('consultation')
+  // Après un rechargement, le détail ouvert reprend les données à jour
+  useEffect(() => {
+    if (histoDetail) setHistoDetail((detail?.historique ?? []).find((h: any) => h.id === histoDetail.id) ?? histoDetail)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail])
+
+  // ── Ordonnances multiples ──
+  const [ordonnanceActiveId, setOrdonnanceActiveId] = useState<number | null>(null)
+  const ordonnancesConsult: any[] = consultation?.ordonnances ?? []
+  const ordonnanceActive = ordonnancesConsult.find((o) => o.id === ordonnanceActiveId) ?? null
+  const medicamentsOrdonnance = (consultation?.medicaments ?? []).filter(
+    (m: any) => !ordonnanceActive || m.ordonnanceId === ordonnanceActive.id,
+  )
+  useEffect(() => {
+    if (!ordonnancesConsult.some((o) => o.id === ordonnanceActiveId)) {
+      setOrdonnanceActiveId(ordonnancesConsult.length ? ordonnancesConsult[ordonnancesConsult.length - 1].id : null)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consultation])
+  async function nouvelleOrdonnance() {
+    if (!consultation || !passage) return
+    try {
+      const { data } = await http.post(`/consultations/${consultation.id}/ordonnances`)
+      await chargerDetail(passage.id)
+      setOrdonnanceActiveId(data.id)
+      Alert.alert('💊 Nouvelle ordonnance', `Ordonnance ${data.numero} prête : ajoutez les médicaments.`)
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? "Création de l'ordonnance impossible.")
+    }
+  }
+
+  // ── Résultat d'un examen fait hors clinique (photo du document) ──
+  const [ligneJoindre, setLigneJoindre] = useState<any>(null)
+  const [formJoindre, setFormJoindre] = useState({ contenu: '', nomFichier: '', dateExamen: '', lieu: '', conclusion: '' })
+  const [joindreEnCours, setJoindreEnCours] = useState(false)
+  const [documentVu, setDocumentVu] = useState<any>(null)
+
+  function ouvrirJoindre(l: any) {
+    const r = l.resultatExterne
+    setFormJoindre({
+      contenu: '',
+      nomFichier: '',
+      dateExamen: r?.dateExamen ? String(r.dateExamen).slice(0, 10) : '',
+      lieu: r?.lieu ?? '',
+      conclusion: r?.conclusion ?? '',
+    })
+    setLigneJoindre(l)
+  }
+  async function choisirPhoto(source: 'camera' | 'galerie') {
+    if (source === 'camera') {
+      const perm = await ImagePicker.requestCameraPermissionsAsync()
+      if (!perm.granted) {
+        Alert.alert('Appareil photo', "L'accès à l'appareil photo a été refusé.")
+        return
+      }
+    }
+    const options: ImagePicker.ImagePickerOptions = { mediaTypes: ['images'], base64: true, quality: 0.6 }
+    const r = source === 'camera' ? await ImagePicker.launchCameraAsync(options) : await ImagePicker.launchImageLibraryAsync(options)
+    if (r.canceled || !r.assets?.[0]?.base64) return
+    const a = r.assets[0]
+    if (((a.base64 ?? '').length * 3) / 4 > 7 * 1024 * 1024) {
+      Alert.alert('Photo trop lourde', 'Reprenez la photo (7 Mo maximum).')
+      return
+    }
+    setFormJoindre((f) => ({
+      ...f,
+      contenu: `data:image/jpeg;base64,${a.base64}`,
+      nomFichier: a.fileName ?? `resultat-${Date.now()}.jpg`,
+    }))
+  }
+  async function enregistrerJoindre() {
+    if (!ligneJoindre) return
+    if (!formJoindre.contenu && !ligneJoindre.resultatExterne) {
+      Alert.alert('Résultat', 'Prenez une photo du résultat ou choisissez-la dans la galerie.')
+      return
+    }
+    setJoindreEnCours(true)
+    try {
+      await http.post(`/consultations/examens/${ligneJoindre.id}/resultat-externe`, {
+        nomFichier: formJoindre.nomFichier || undefined,
+        contenu: formJoindre.contenu || undefined,
+        dateExamen: formJoindre.dateExamen || undefined,
+        lieu: formJoindre.lieu || undefined,
+        conclusion: formJoindre.conclusion || undefined,
+      })
+      Alert.alert('✅ Résultat enregistré', `« ${ligneJoindre.libelle} » est joint au dossier.`)
+      setLigneJoindre(null)
+      if (passage) await chargerDetail(passage.id)
+    } catch (e: any) {
+      Alert.alert('Erreur', e.response?.data?.message ?? 'Enregistrement impossible.')
+    } finally {
+      setJoindreEnCours(false)
+    }
+  }
+  async function voirDocument(ligneId: number, libelle: string) {
+    try {
+      const { data } = await http.get(`/consultations/examens/${ligneId}/resultat-externe`)
+      setDocumentVu({ ...data, ligneId, libelle })
+    } catch (e: any) {
+      Alert.alert('Document', e.response?.data?.message ?? 'Document introuvable.')
+    }
+  }
+  function supprimerDocument() {
+    const doc = documentVu
+    if (!doc) return
+    Alert.alert('Supprimer le document ?', `Le résultat joint à « ${doc.libelle} » sera retiré du dossier.`, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Oui, supprimer',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await http.delete(`/consultations/examens/${doc.ligneId}/resultat-externe`)
+            setDocumentVu(null)
+            if (passage) await chargerDetail(passage.id)
+          } catch (e: any) {
+            Alert.alert('Erreur', e.response?.data?.message ?? 'Suppression impossible.')
+          }
+        },
+      },
+    ])
+  }
+
+  // ── Historique : synthèse du dossier et examens de chaque passage ──
+  const cleTexte = (t: string) =>
+    t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ' ').trim()
+  const syntheseDossier = useMemo(() => {
+    const liste: any[] = historique
+    const cumuler = (valeurs: { libelle: string; date: string }[]) => {
+      const vus = new Map<string, { libelle: string; date: string; nb: number }>()
+      for (const v of valeurs) {
+        const k = cleTexte(v.libelle)
+        if (!k) continue
+        const e = vus.get(k)
+        if (e) e.nb += 1
+        else vus.set(k, { ...v, nb: 1 })
+      }
+      return [...vus.values()]
+    }
+    const antecedents = new Map<string, string>()
+    const noter = (t: string) => {
+      const k = cleTexte(t)
+      if (k && !antecedents.has(k)) antecedents.set(k, t)
+    }
+    for (const h of liste) {
+      if (h.hta === true) noter('HTA')
+      if (h.diabete === true) noter('Diabète')
+      if (h.tabac === true) noter('Tabac')
+      if (h.alcool === true) noter('Alcool')
+      ;(h.antecedentsMedicaux ?? '').split(/[;,]/).forEach((a: string) => noter(a.trim()))
+      if (h.antecedentsChirurgicaux?.trim()) noter(`Chirurgie : ${h.antecedentsChirurgicaux.trim()}`)
+    }
+    return {
+      antecedents: [...antecedents.values()],
+      diagnostics: cumuler(liste.filter((h) => h.diagnostic?.trim()).map((h) => ({ libelle: h.diagnostic.trim(), date: h.createdAt }))),
+      pathologies: cumuler(
+        liste.flatMap((h) =>
+          (h.pathologiesAssociees ?? '')
+            .split(/[;,]/)
+            .map((x: string) => x.trim())
+            .filter(Boolean)
+            .map((libelle: string) => ({ libelle, date: h.createdAt })),
+        ),
+      ),
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [historique])
+  const histoLignes: any[] = histoDetail?.passage?.prestations ?? []
+  const realiseIci = (l: any) => !!(l.examenLabo || l.examenImagerie)
+  const histoPrescrits = (type: string) =>
+    histoLignes.filter((l) => l.prestation?.type === type && l.statut !== 'EXTERNE' && !realiseIci(l))
+  const histoExternes = useMemo(() => {
+    const lignes = histoLignes.filter((l) => l.statut === 'EXTERNE' || (l.statut === 'EN_ATTENTE' && !realiseIci(l)))
+    const vides = ['RAS', 'NEANT', 'AUCUN', 'AUCUNE', 'NON', 'NA', '-', '/']
+    const catalogue = prestations.filter((p: any) => ['EXAMEN_LABO', 'IMAGERIE'].includes(p.type)).map((p: any) => cleTexte(p.libelle))
+    const demandes = separerExamens(histoDetail?.autresExamens)
+      .filter((ex) => !vides.includes(cleTexte(ex)) && !catalogue.includes(cleTexte(ex)))
+      .filter((ex) => !lignes.some((l) => cleTexte(l.libelle) === cleTexte(ex)))
+      .map((ex) => ({ id: `demande-${ex}`, libelle: ex, resultatExterne: null, aCreer: true }))
+    return [...lignes, ...demandes]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [histoDetail, prestations])
+  async function joindreDepuisHistorique(e: any) {
+    if (!e.aCreer) return ouvrirJoindre(e)
+    try {
+      const { data } = await http.post(`/consultations/${histoDetail.id}/examens/ajouter`, { libelle: e.libelle })
+      if (passage) await chargerDetail(passage.id)
+      ouvrirJoindre({ id: data.id, libelle: data.libelle, resultatExterne: null })
+    } catch (err: any) {
+      Alert.alert('Erreur', err.response?.data?.message ?? "Impossible d'ajouter cet examen.")
+    }
+  }
 
   /** Découpe le texte d'une fiche en segments (valeurs saisies → gras). */
   function decouperValeurs(texte: string, valeurs: any): { t: string; val: boolean }[] {
@@ -1372,9 +1571,41 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                 </Card>
                 {historique.length > 0 ? (
                   <Card>
+                    <SectionTitle>📋 Synthèse du dossier</SectionTitle>
+                    <Text style={styles.syntheseTitre}>🩺 Antécédents médicaux</Text>
+                    <Text style={styles.note}>
+                      {syntheseDossier.antecedents.length ? syntheseDossier.antecedents.join(' · ') : 'Aucun antécédent renseigné.'}
+                    </Text>
+                    <Text style={styles.syntheseTitre}>📌 Diagnostics déjà retenus</Text>
+                    {syntheseDossier.diagnostics.length === 0 ? <Text style={styles.note}>Aucun diagnostic enregistré.</Text> : null}
+                    {syntheseDossier.diagnostics.map((d) => (
+                      <Text key={d.libelle} style={styles.note}>
+                        • <Text style={{ fontWeight: '800' }}>{d.libelle}</Text> — {d.nb > 1 ? `${d.nb} fois, dernier le ` : 'le '}
+                        {new Date(d.date).toLocaleDateString('fr-FR')}
+                      </Text>
+                    ))}
+                    <Text style={styles.syntheseTitre}>🧬 Pathologies associées déjà diagnostiquées</Text>
+                    {syntheseDossier.pathologies.length === 0 ? <Text style={styles.note}>Aucune pathologie associée.</Text> : null}
+                    {syntheseDossier.pathologies.map((d) => (
+                      <Text key={d.libelle} style={styles.note}>
+                        • <Text style={{ fontWeight: '800' }}>{d.libelle}</Text> — {d.nb > 1 ? `${d.nb} fois, dernier le ` : 'le '}
+                        {new Date(d.date).toLocaleDateString('fr-FR')}
+                      </Text>
+                    ))}
+                  </Card>
+                ) : null}
+                {historique.length > 0 ? (
+                  <Card>
                     <SectionTitle>Historique médical — du plus récent au plus ancien</SectionTitle>
                     {historique.map((h: any, i: number) => (
-                      <TouchableOpacity key={i} style={styles.item} onPress={() => setHistoDetail(h)}>
+                      <TouchableOpacity
+                        key={i}
+                        style={styles.item}
+                        onPress={() => {
+                          setHistoOnglet('consultation')
+                          setHistoDetail(h)
+                        }}
+                      >
                         <View style={{ flex: 1 }}>
                           <Text style={styles.itemTitre}>
                             {new Date(h.createdAt ?? h.date).toLocaleDateString('fr-FR')} ·{' '}
@@ -1404,7 +1635,30 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   <SectionTitle>Prescription de médicaments</SectionTitle>
                   {consultation ? (
                     <>
-                      {(consultation.medicaments ?? []).map((p: any) => (
+                      {/* Plusieurs ordonnances indépendantes par consultation */}
+                      <View style={styles.ordoPuces}>
+                        {ordonnancesConsult.map((o) => (
+                          <TouchableOpacity
+                            key={o.id}
+                            style={[styles.ordoPuce, o.id === ordonnanceActiveId && styles.ordoPuceActive]}
+                            onPress={() => setOrdonnanceActiveId(o.id)}
+                          >
+                            <Text style={[styles.ordoPuceTexte, o.id === ordonnanceActiveId && styles.ordoPuceTexteActif]}>
+                              💊 {o.numero} · {o.statut === 'TRAITEE' ? 'délivrée' : 'en attente'}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                        <TouchableOpacity style={styles.ordoNouvelle} onPress={nouvelleOrdonnance}>
+                          <Text style={styles.ordoNouvelleTexte}>＋ Nouvelle ordonnance</Text>
+                        </TouchableOpacity>
+                      </View>
+                      {ordonnanceActive?.statut === 'TRAITEE' ? (
+                        <Text style={styles.note}>
+                          🔒 L'ordonnance {ordonnanceActive.numero} a déjà été délivrée : elle n'est plus modifiable. Créez une nouvelle ordonnance.
+                        </Text>
+                      ) : null}
+                      {medicamentsOrdonnance.length === 0 ? <Text style={styles.note}>Aucun médicament sur cette ordonnance.</Text> : null}
+                      {medicamentsOrdonnance.map((p: any) => (
                         <View key={p.id} style={styles.ligneMed}>
                           <View style={{ flex: 1 }}>
                             <Text style={styles.medNom}>
@@ -1416,11 +1670,14 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                               {[p.posologie, p.quantite, p.duree].filter(Boolean).join(' · ') || '—'}
                             </Text>
                           </View>
-                          <Btn title="✕" small variant="danger" onPress={() => retirerMedicament(p.id)} />
+                          {ordonnanceActive?.statut !== 'TRAITEE' ? (
+                            <Btn title="✕" small variant="danger" onPress={() => retirerMedicament(p.id)} />
+                          ) : null}
                         </View>
                       ))}
                       <Btn
-                        title="＋ Ajouter un médicament"
+                        title={`＋ Ajouter un médicament${ordonnanceActive ? ` à ${ordonnanceActive.numero}` : ''}`}
+                        disabled={ordonnanceActive?.statut === 'TRAITEE'}
                         variant="outline"
                         onPress={() => {
                           setModaleMed(true)
@@ -1499,7 +1756,17 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     {l.statut === 'NON_PRESCRITE' && consultation ? (
                       <Btn title="✍️ Prescrire" small variant="outline" onPress={() => prescrireExamen(l)} />
                     ) : null}
-                    {(l.statut === 'EN_ATTENTE' || l.statut === 'EXTERNE') && consultation ? (
+                    {/* Examen fait hors clinique : photo du résultat rapporté par le patient */}
+                    {l.statut === 'EXTERNE' && !l.resultatExterne ? (
+                      <Btn title="📎 Joindre" small onPress={() => ouvrirJoindre(l)} />
+                    ) : null}
+                    {l.resultatExterne ? (
+                      <Btn title="👁️ Voir" small variant="outline" onPress={() => voirDocument(l.id, l.libelle)} />
+                    ) : null}
+                    {l.statut === 'EN_ATTENTE' && ['EXAMEN_LABO', 'IMAGERIE'].includes(l.prestation?.type) && !resultatExamen(l) ? (
+                      <Btn title="📎 Fait ailleurs" small variant="outline" onPress={() => ouvrirJoindre(l)} />
+                    ) : null}
+                    {(l.statut === 'EN_ATTENTE' || l.statut === 'EXTERNE') && consultation && !l.resultatExterne ? (
                       <Btn title="✕" small variant="danger" onPress={() => retirerExamen(l)} />
                     ) : null}
                   </View>
@@ -1589,61 +1856,236 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       >
         {histoDetail ? (
           <>
-            {histoDetail.diagnostic ? (
-              <Text style={styles.note}>
-                <Text style={{ fontWeight: '800' }}>Diagnostic : </Text>
-                {histoDetail.diagnostic}
-              </Text>
-            ) : null}
-            {histoDetail.motif ? (
-              <Text style={styles.note}>
-                <Text style={{ fontWeight: '800' }}>Motif : </Text>
-                {histoDetail.motif}
-              </Text>
-            ) : null}
-            {(histoDetail.medicaments ?? []).length > 0 ? (
-              <Text style={styles.note}>
-                <Text style={{ fontWeight: '800' }}>💊 Ordonnance : </Text>
-                {(histoDetail.medicaments as any[])
-                  .map((m) => `${m.medicamentNom ?? m.nom ?? '—'} — ${m.posologie ?? '—'} (${m.quantite ?? '—'}, ${m.duree ?? '—'})`)
-                  .join('\n• ')}
-              </Text>
-            ) : (
-              <Text style={styles.note}>💊 Aucun médicament prescrit.</Text>
-            )}
-            {(histoDetail.passage?.examensLabo ?? []).map((e: any) => (
-              <View key={`l${e.id}`} style={styles.item}>
-                <Text style={styles.itemTitre}>🔬 {e.libelle}</Text>
-                {(e.lignes ?? []).map((lg: any) => (
-                  <Text key={lg.id} style={styles.itemSous}>
-                    {lg.parametre} : <Text style={{ fontWeight: '800' }}>{lg.valeur}</Text> {lg.unite} · normes {lg.normes ?? '—'}
-                  </Text>
-                ))}
-                {e.conclusion ? (
-                  <Text style={styles.itemSous}>Conclusion : {e.conclusion}</Text>
-                ) : null}
-              </View>
-            ))}
-            {(histoDetail.passage?.examensImagerie ?? []).map((e: any) => (
-              <View key={`i${e.id}`} style={styles.item}>
-                <Text style={styles.itemTitre}>🩻 {e.libelle}</Text>
-                {e.resultat ? <Text style={styles.itemSous}>Résultat : {e.resultat}</Text> : null}
-                {e.conclusion ? <Text style={styles.itemSous}>Conclusion : {e.conclusion}</Text> : null}
-              </View>
-            ))}
-            {(histoDetail.passage?.fichesExamenImagerie ?? []).map((f: any) => (
-              <View key={`f${f.id}`} style={styles.item}>
-                <Text style={styles.itemTitre}>📄 {f.libelleType}</Text>
-                <Text style={styles.ficheTexte}>
-                  {decouperValeurs(f.texte, f.valeurs).map((s, i) => (
-                    <Text key={i} style={s.val ? styles.ficheValeur : undefined}>
-                      {s.t}
-                    </Text>
-                  ))}
+            <Onglets
+              actif={histoOnglet}
+              onChange={(k) => setHistoOnglet(k as typeof histoOnglet)}
+              tabs={[
+                { key: 'consultation', label: '🩺 Consultation' },
+                { key: 'labo', label: '🔬 Labo', count: (histoDetail.passage?.examensLabo ?? []).length + histoPrescrits('EXAMEN_LABO').length },
+                {
+                  key: 'imagerie',
+                  label: '🩻 Imagerie',
+                  count:
+                    (histoDetail.passage?.examensImagerie ?? []).length +
+                    (histoDetail.passage?.fichesExamenImagerie ?? []).length +
+                    ((histoDetail.passage?.fichesExamenImagerie ?? []).length ? 0 : histoPrescrits('IMAGERIE').length),
+                },
+                { key: 'ordonnance', label: '💊 Ordonnance', count: (histoDetail.medicaments ?? []).length },
+                { key: 'externes', label: '📎 Hors clinique', count: histoExternes.length },
+              ]}
+            />
+
+            {histoOnglet === 'consultation' ? (
+              <>
+                <Text style={styles.syntheseTitre}>Constantes</Text>
+                <Text style={styles.note}>
+                  Poids {histoDetail.passage?.poids ?? '—'} kg · Taille {histoDetail.passage?.taille || '—'} cm · Temp. {histoDetail.passage?.temperature ?? '—'} °C ·
+                  Pouls {histoDetail.passage?.pouls ?? '—'} · TA {histoDetail.passage?.tensionGauche || '—'} / {histoDetail.passage?.tensionDroite || '—'}
                 </Text>
-              </View>
-            ))}
+                <Text style={styles.syntheseTitre}>Antécédents</Text>
+                <Text style={styles.note}>Traitement antérieur : {histoDetail.traitementAnterieur || '—'}</Text>
+                <Text style={styles.note}>Antécédents médicaux : {histoDetail.antecedentsMedicaux || '—'}</Text>
+                <Text style={styles.note}>Antécédents chirurgicaux : {histoDetail.antecedentsChirurgicaux || (histoDetail.chirurgie === false ? 'Non' : '—')}</Text>
+                <Text style={styles.syntheseTitre}>Examen clinique</Text>
+                <Text style={styles.note}>Motif : {histoDetail.motif || '—'}</Text>
+                <Text style={styles.note}>Examen physique : {histoDetail.observation || '—'}</Text>
+                <Text style={styles.note}>Autres examens demandés : {histoDetail.autresExamens || '—'}</Text>
+                <Text style={styles.syntheseTitre}>Diagnostic</Text>
+                <Text style={styles.note}>
+                  <Text style={{ fontWeight: '800' }}>{histoDetail.diagnostic || '—'}</Text>
+                </Text>
+                <Text style={styles.note}>Pathologies associées : {histoDetail.pathologiesAssociees || '—'}</Text>
+              </>
+            ) : null}
+
+            {histoOnglet === 'labo' ? (
+              <>
+                {(histoDetail.passage?.examensLabo ?? []).length + histoPrescrits('EXAMEN_LABO').length === 0 ? (
+                  <Text style={styles.note}>Aucun examen de laboratoire pour ce passage.</Text>
+                ) : null}
+                {histoPrescrits('EXAMEN_LABO').map((l) => (
+                  <View key={`p${l.id}`} style={styles.item}>
+                    <Text style={styles.itemTitre}>🔬 {l.libelle}</Text>
+                    <Text style={styles.itemSous}>
+                      {l.statut === 'EN_ATTENTE' ? 'Prescrit — en attente de paiement' : 'Payé — en attente de réalisation'}
+                    </Text>
+                  </View>
+                ))}
+                {(histoDetail.passage?.examensLabo ?? []).map((e: any) => (
+                  <View key={`l${e.id}`} style={styles.item}>
+                    <Text style={styles.itemTitre}>
+                      🔬 {e.libelle} — {e.statut === 'VALIDE' ? 'validé' : 'en cours'}
+                    </Text>
+                    {(e.lignes ?? []).map((lg: any) => (
+                      <Text key={lg.id} style={styles.itemSous}>
+                        {lg.parametre} : <Text style={{ fontWeight: '800' }}>{lg.valeur}</Text> {lg.unite} · normes {lg.normes ?? '—'}
+                      </Text>
+                    ))}
+                    {e.conclusion ? <Text style={styles.itemSous}>Conclusion : {e.conclusion}</Text> : null}
+                  </View>
+                ))}
+              </>
+            ) : null}
+
+            {histoOnglet === 'imagerie' ? (
+              <>
+                {(histoDetail.passage?.examensImagerie ?? []).length + (histoDetail.passage?.fichesExamenImagerie ?? []).length === 0 &&
+                histoPrescrits('IMAGERIE').length === 0 ? (
+                  <Text style={styles.note}>Aucun examen d'imagerie pour ce passage.</Text>
+                ) : null}
+                {(histoDetail.passage?.fichesExamenImagerie ?? []).length === 0
+                  ? histoPrescrits('IMAGERIE').map((l) => (
+                      <View key={`p${l.id}`} style={styles.item}>
+                        <Text style={styles.itemTitre}>🩻 {l.libelle}</Text>
+                        <Text style={styles.itemSous}>
+                          {l.statut === 'EN_ATTENTE' ? 'Prescrit — en attente de paiement' : 'Payé — en attente de réalisation'}
+                        </Text>
+                      </View>
+                    ))
+                  : null}
+                {(histoDetail.passage?.examensImagerie ?? []).map((e: any) => (
+                  <View key={`i${e.id}`} style={styles.item}>
+                    <Text style={styles.itemTitre}>
+                      🩻 {e.libelle} — {e.statut === 'VALIDE' ? 'validé' : 'en cours'}
+                    </Text>
+                    {e.indication ? <Text style={styles.itemSous}>Indication : {e.indication}</Text> : null}
+                    {e.resultat ? <Text style={styles.itemSous}>Résultat : {e.resultat}</Text> : null}
+                    {e.conclusion ? <Text style={styles.itemSous}>Conclusion : {e.conclusion}</Text> : null}
+                  </View>
+                ))}
+                {(histoDetail.passage?.fichesExamenImagerie ?? []).map((f: any) => (
+                  <View key={`f${f.id}`} style={styles.item}>
+                    <Text style={styles.itemTitre}>📄 {f.libelleType}</Text>
+                    <Text style={styles.ficheTexte}>
+                      {decouperValeurs(f.texte, f.valeurs).map((x, i) => (
+                        <Text key={i} style={x.val ? styles.ficheValeur : undefined}>
+                          {x.t}
+                        </Text>
+                      ))}
+                    </Text>
+                  </View>
+                ))}
+              </>
+            ) : null}
+
+            {histoOnglet === 'ordonnance' ? (
+              <>
+                {(histoDetail.medicaments ?? []).length === 0 ? <Text style={styles.note}>💊 Aucun médicament prescrit.</Text> : null}
+                {[...(histoDetail.ordonnances ?? []), { id: null, numero: null, statut: null }].map((o: any) => {
+                  const meds = (histoDetail.medicaments ?? []).filter((m: any) =>
+                    o.id ? m.ordonnanceId === o.id : !(histoDetail.ordonnances ?? []).some((x: any) => x.id === m.ordonnanceId),
+                  )
+                  if (!meds.length) return null
+                  return (
+                    <View key={o.id ?? 'sans'} style={styles.item}>
+                      <Text style={styles.itemTitre}>
+                        {o.numero ? `Ordonnance N° ${o.numero}` : 'Ordonnance'}
+                        {o.statut ? ` — ${o.statut === 'TRAITEE' ? 'délivrée' : 'non délivrée'}` : ''}
+                      </Text>
+                      {meds.map((m: any) => (
+                        <Text key={m.id} style={styles.itemSous}>
+                          • <Text style={{ fontWeight: '800' }}>{m.medicamentNom ?? '—'}</Text>
+                          {m.forme ? ` (${m.forme})` : ''} — {m.posologie ?? '—'} ({m.quantite ?? '—'}, {m.duree ?? '—'})
+                        </Text>
+                      ))}
+                    </View>
+                  )
+                })}
+              </>
+            ) : null}
+
+            {histoOnglet === 'externes' ? (
+              <>
+                {histoExternes.length === 0 ? <Text style={styles.note}>Aucun examen hors clinique pour ce passage.</Text> : null}
+                {histoExternes.map((e: any) => (
+                  <View key={e.id} style={[styles.item, { flexDirection: 'row', alignItems: 'center', gap: 8 }]}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemTitre}>📎 {e.libelle}</Text>
+                      {e.statut === 'EN_ATTENTE' ? <Text style={styles.itemSous}>Prescrit à la clinique, non réalisé ici</Text> : null}
+                      {e.resultatExterne ? (
+                        <Text style={styles.itemSous}>
+                          {e.resultatExterne.dateExamen ? new Date(e.resultatExterne.dateExamen).toLocaleDateString('fr-FR') : '—'} ·{' '}
+                          {e.resultatExterne.lieu || '—'}
+                          {e.resultatExterne.conclusion ? ` · ${e.resultatExterne.conclusion}` : ''}
+                        </Text>
+                      ) : (
+                        <Badge label="Non joint" tone="warning" />
+                      )}
+                    </View>
+                    {e.resultatExterne ? (
+                      <Btn title="👁️ Voir" small variant="outline" onPress={() => voirDocument(e.id, e.libelle)} />
+                    ) : (
+                      <Btn title="📎 Joindre" small onPress={() => joindreDepuisHistorique(e)} />
+                    )}
+                  </View>
+                ))}
+              </>
+            ) : null}
           </>
+        ) : null}
+      </Modale>
+
+      {/* Modale : joindre la photo du résultat d'un examen fait hors clinique */}
+      <Modale
+        visible={ligneJoindre !== null}
+        titre={`📎 Résultat — ${ligneJoindre?.libelle ?? ''}`}
+        sousTitre="Photographiez le résultat rapporté par le patient (ou choisissez la photo dans la galerie)."
+        onFermer={() => setLigneJoindre(null)}
+        actions={
+          <>
+            <Btn title="Annuler" small variant="outline" onPress={() => setLigneJoindre(null)} />
+            <Btn title="💾 Enregistrer" small onPress={enregistrerJoindre} loading={joindreEnCours} />
+          </>
+        }
+      >
+        {ligneJoindre?.statut === 'EN_ATTENTE' ? (
+          <Text style={styles.note}>
+            ℹ️ Cet examen était prescrit à la clinique : en joignant un résultat, il sera marqué « fait hors clinique » et ne sera plus à payer à la caisse.
+          </Text>
+        ) : null}
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+          <View style={{ flex: 1 }}>
+            <Btn title="📷 Prendre une photo" variant="outline" onPress={() => choisirPhoto('camera')} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Btn title="🖼️ Galerie" variant="outline" onPress={() => choisirPhoto('galerie')} />
+          </View>
+        </View>
+        {formJoindre.contenu ? (
+          <Image source={{ uri: formJoindre.contenu }} style={styles.apercuPhoto} resizeMode="contain" />
+        ) : ligneJoindre?.resultatExterne ? (
+          <Text style={styles.note}>Document actuel : {ligneJoindre.resultatExterne.nomFichier} (gardé si aucune nouvelle photo)</Text>
+        ) : null}
+        <DateField label="Date de l'examen" value={formJoindre.dateExamen} onChange={(v) => setFormJoindre({ ...formJoindre, dateExamen: v })} />
+        <Input label="Réalisé à (laboratoire, centre…)" value={formJoindre.lieu} onChangeText={(t) => setFormJoindre({ ...formJoindre, lieu: t })} />
+        <Input label="Conclusion" value={formJoindre.conclusion} onChangeText={(t) => setFormJoindre({ ...formJoindre, conclusion: t })} multiline />
+      </Modale>
+
+      {/* Visionneuse du document joint */}
+      <Modale
+        visible={documentVu !== null}
+        titre={`📎 ${documentVu?.libelle ?? ''}`}
+        sousTitre={[
+          documentVu?.dateExamen ? `Examen du ${new Date(documentVu.dateExamen).toLocaleDateString('fr-FR')}` : '',
+          documentVu?.lieu ?? '',
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+        onFermer={() => setDocumentVu(null)}
+        actions={
+          <>
+            <Btn title="🗑️ Supprimer" small variant="danger" onPress={supprimerDocument} />
+            <Btn title="Fermer" small variant="outline" onPress={() => setDocumentVu(null)} />
+          </>
+        }
+      >
+        {documentVu?.conclusion ? <Text style={styles.note}>Conclusion : {documentVu.conclusion}</Text> : null}
+        {documentVu?.typeMime?.startsWith('image/') ? (
+          <Image source={{ uri: documentVu.contenu }} style={styles.documentImage} resizeMode="contain" />
+        ) : documentVu ? (
+          <Text style={styles.note}>
+            Document PDF ({documentVu.nomFichier}) : il s'ouvre et s'imprime depuis la version web.
+          </Text>
         ) : null}
       </Modale>
 
@@ -1720,6 +2162,16 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 }
 
 const styles = StyleSheet.create({
+  ordoPuces: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 },
+  ordoPuce: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, borderWidth: 1.5, borderColor: '#c9ece5', backgroundColor: colors.surface },
+  ordoPuceActive: { borderColor: colors.primary, backgroundColor: '#d9f2e8' },
+  ordoPuceTexte: { fontSize: 12.5, fontWeight: '700', color: colors.textMuted },
+  ordoPuceTexteActif: { color: colors.primaryDarker },
+  ordoNouvelle: { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, borderWidth: 1.5, borderStyle: 'dashed', borderColor: colors.primary },
+  ordoNouvelleTexte: { fontSize: 12.5, fontWeight: '700', color: colors.primary },
+  syntheseTitre: { fontSize: 13, fontWeight: '800', color: colors.primaryDarker, marginTop: 10, marginBottom: 2 },
+  apercuPhoto: { width: '100%', height: 220, marginBottom: 10, backgroundColor: '#0f172a', borderRadius: 10 },
+  documentImage: { width: '100%', height: 460, backgroundColor: '#0f172a', borderRadius: 10 },
   bandeau: { paddingHorizontal: 16, marginBottom: 10 },
   btnRetour: {
     alignSelf: 'flex-start',

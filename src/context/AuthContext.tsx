@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react'
+import { AppState } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import http, { setOnUnauthorized } from '../api/http'
 
@@ -19,6 +20,13 @@ type AuthContextType = {
   login: (matricule: string, motDePasse: string) => Promise<void>
   logout: () => Promise<void>
   canAccess: (moduleCode: string) => boolean
+  /** Service en cours (pointage) : null = pas en service. */
+  service: { id: number; debut: string } | null
+  /** L'agent doit prendre son service avant d'ouvrir un module (l'administrateur en est dispensé). */
+  doitPrendreService: boolean
+  chargerService: () => Promise<void>
+  prendreService: () => Promise<void>
+  terminerService: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -28,12 +36,20 @@ const AuthContext = createContext<AuthContextType>({
   login: async () => {},
   logout: async () => {},
   canAccess: () => true,
+  service: null,
+  doitPrendreService: false,
+  chargerService: async () => {},
+  prendreService: async () => {},
+  terminerService: async () => {},
 })
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null)
   const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const [service, setService] = useState<{ id: number; debut: string } | null>(null)
+  // false si le serveur ne gère pas encore le pointage : rien n'est alors verrouillé
+  const [pointageDisponible, setPointageDisponible] = useState(true)
 
   useEffect(() => {
     ;(async () => {
@@ -60,6 +76,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => setOnUnauthorized(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // ── Pointage de service (mêmes règles que le web) ──
+  async function chargerService() {
+    try {
+      const { data } = await http.get('/finances/mon-service')
+      setService(data.service)
+      setPointageDisponible(true)
+    } catch (e: any) {
+      if (e.response?.status !== 401) setPointageDisponible(false)
+      setService(null)
+    }
+  }
+  async function prendreService() {
+    const { data } = await http.post('/finances/mon-service/prendre')
+    setService(data.service)
+  }
+  async function terminerService() {
+    await http.post('/finances/mon-service/terminer')
+    setService(null)
+  }
+
+  // Service en cours chargé à la connexion
+  useEffect(() => {
+    if (token) chargerService()
+    else setService(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token])
+
+  // Signal de présence chaque minute tant que l'application est ouverte au premier plan
+  useEffect(() => {
+    if (!token) return
+    const signaler = () => {
+      if (AppState.currentState === 'active') http.post('/finances/mon-service/presence').catch(() => {})
+    }
+    signaler()
+    const minuterie = setInterval(signaler, 60000)
+    return () => clearInterval(minuterie)
+  }, [token])
+
+  const exempteDePointage = user?.role?.code === 'ADMINISTRATEUR'
+  const doitPrendreService = pointageDisponible && !exempteDePointage && !service
 
   async function login(matricule: string, motDePasse: string) {
     const { data } = await http.post('/auth/login', { matricule, motDePasse })
@@ -94,7 +151,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ token, user, loading, login, logout, canAccess }}>
+    <AuthContext.Provider
+      value={{ token, user, loading, login, logout, canAccess, service, doitPrendreService, chargerService, prendreService, terminerService }}
+    >
       {children}
     </AuthContext.Provider>
   )
