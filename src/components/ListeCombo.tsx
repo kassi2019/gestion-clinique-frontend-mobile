@@ -27,6 +27,7 @@ export default function ListeCombo({
   onChange,
   ajouter,
   keyboardType,
+  multiple = false,
 }: {
   label?: string
   value: string
@@ -36,6 +37,8 @@ export default function ListeCombo({
   /** Appelé quand l'utilisateur saisit un nouveau libellé (auto-alimentation). */
   ajouter?: (libelle: string) => void
   keyboardType?: 'default' | 'numeric'
+  /** Choix multiple : cases à cocher dans la liste, value = « A ; B ; C ». */
+  multiple?: boolean
 }) {
   const [ouvert, setOuvert] = useState(false)
   const [recherche, setRecherche] = useState('')
@@ -48,11 +51,23 @@ export default function ListeCombo({
       .replace(/[̀-ͯ]/g, '')
       .toLowerCase()
 
+  // Choix multiple : valeurs cochées (les saisies libres restent proposées)
+  const choisis = useMemo(
+    () => (multiple ? (value ?? '').split(';').map((x) => x.trim()).filter(Boolean) : []),
+    [multiple, value],
+  )
+  const toutes = useMemo(() => {
+    if (!multiple) return options
+    const libelles = options.map((o) => o.label)
+    return [...options, ...choisis.filter((c) => !libelles.includes(c)).map((c) => ({ value: c, label: c }))]
+  }, [multiple, options, choisis])
+  const estChoisi = (libelle: string) => (multiple ? choisis.includes(libelle) : libelle === value)
+
   const filtrees = useMemo(() => {
     const q = norm(recherche.trim())
-    if (!q) return options
-    return options.filter((o) => norm(o.label).includes(q))
-  }, [options, recherche])
+    if (!q) return toutes
+    return toutes.filter((o) => norm(o.label).includes(q))
+  }, [toutes, recherche])
 
   function ouvrir() {
     setRecherche('')
@@ -61,6 +76,11 @@ export default function ListeCombo({
   }
 
   function choisir(libelle: string) {
+    if (multiple) {
+      // Coche / décoche sans fermer la liste
+      onChange((choisis.includes(libelle) ? choisis.filter((c) => c !== libelle) : [...choisis, libelle]).join(' ; '))
+      return
+    }
     onChange(libelle)
     setOuvert(false)
   }
@@ -69,6 +89,11 @@ export default function ListeCombo({
     const v = libre.trim()
     if (!v) return
     if (ajouter) ajouter(v)
+    if (multiple) {
+      setLibre('')
+      if (!choisis.includes(v)) onChange([...choisis, v].join(' ; '))
+      return
+    }
     choisir(v)
   }
 
@@ -80,7 +105,7 @@ export default function ListeCombo({
         onPress={ouvrir}
         accessibilityRole="button"
       >
-        <Text style={styles.champTexte} numberOfLines={1} ellipsizeMode="tail">
+        <Text style={styles.champTexte} numberOfLines={multiple ? 4 : 1} ellipsizeMode="tail">
           {value || placeholder}
         </Text>
         <Text style={styles.fleche}>▾</Text>
@@ -109,11 +134,21 @@ export default function ListeCombo({
               keyboardShouldPersistTaps="handled"
               renderItem={({ item }) => (
                 <Pressable
-                  style={({ pressed }) => [styles.option, item.label === value && styles.optionChoisie, pressed && styles.optionPressee]}
+                  style={({ pressed }) => [
+                    styles.option,
+                    multiple && styles.optionMultiple,
+                    estChoisi(item.label) && styles.optionChoisie,
+                    pressed && styles.optionPressee,
+                  ]}
                   onPress={() => choisir(item.label)}
                 >
-                  <Text style={[styles.optionTexte, item.label === value && styles.optionTexteChoisi]} numberOfLines={2}>
-                    {item.label === value ? '✓  ' : ''}
+                  {multiple ? (
+                    <View style={[styles.caseCocher, estChoisi(item.label) && styles.caseCochee]}>
+                      {estChoisi(item.label) ? <Text style={styles.caseCoche}>✓</Text> : null}
+                    </View>
+                  ) : null}
+                  <Text style={[styles.optionTexte, multiple && { flex: 1 }, estChoisi(item.label) && styles.optionTexteChoisi]} numberOfLines={2}>
+                    {!multiple && estChoisi(item.label) ? '✓  ' : ''}
                     {item.label}
                   </Text>
                 </Pressable>
@@ -139,6 +174,13 @@ export default function ListeCombo({
                 </Pressable>
               </View>
             </View>
+            {multiple ? (
+              <Pressable style={styles.termineBtn} onPress={() => setOuvert(false)}>
+                <Text style={styles.libreBtnTexte}>
+                  Terminé{choisis.length ? ` (${choisis.length} coché${choisis.length > 1 ? 's' : ''})` : ''}
+                </Text>
+              </Pressable>
+            ) : null}
             </Pressable>
           </Pressable>
         </KeyboardAvoidingView>
@@ -233,4 +275,23 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
   },
   libreBtnTexte: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  optionMultiple: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  caseCocher: {
+    width: 22,
+    height: 22,
+    borderRadius: 5,
+    borderWidth: 2,
+    borderColor: colors.borderChamp,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  caseCochee: { backgroundColor: colors.primary, borderColor: colors.primary },
+  caseCoche: { color: '#fff', fontWeight: '800', fontSize: 14 },
+  termineBtn: {
+    marginTop: 12,
+    backgroundColor: colors.primary,
+    borderRadius: radius,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
 })

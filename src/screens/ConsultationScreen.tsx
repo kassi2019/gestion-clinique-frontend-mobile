@@ -35,6 +35,53 @@ function aujourdhui(): string {
   return `${d.getFullYear()}-${m}-${j}`
 }
 
+/** Traitement antérieur : Oui / Non + commentaire dans un seul champ texte (« NON », le commentaire, ou « OUI »). */
+function traitementAnterieurChoix(texte?: string | null): boolean | null {
+  const t = (texte ?? '').trim()
+  if (!t) return null
+  return t.toUpperCase() !== 'NON'
+}
+/** Médicaments, durée et dose rangés dans le même champ : « X ; Durée : Y ; Dose : Z ». */
+function traitementAnterieurDetails(texte?: string | null) {
+  const t = (texte ?? '').trim()
+  const details = { medicaments: '', duree: '', dose: '' }
+  if (!t || ['OUI', 'NON'].includes(t.toUpperCase())) return details
+  const morceaux = t.split(/(?:^|\s*;\s*)(DUR[ÉE]E|DOSE)\s*:\s*/i)
+  details.medicaments = morceaux[0].trim()
+  for (let i = 1; i < morceaux.length; i += 2) {
+    const cle = morceaux[i].toUpperCase().startsWith('DOSE') ? 'dose' : 'duree'
+    details[cle] = (morceaux[i + 1] ?? '').trim()
+  }
+  return details
+}
+/** Antécédents chirurgicaux : « TYPE ; Durée / année : X » dans un seul champ texte. */
+function chirurgieDetails(texte?: string | null) {
+  const morceaux = (texte ?? '').trim().split(/(?:^|\s*;\s*)DUR[ÉE]E\s*\/\s*ANN[ÉE]E\s*:\s*/i)
+  return { type: (morceaux[0] ?? '').trim(), annee: (morceaux[1] ?? '').trim() }
+}
+function chirurgieTexte(f: any): string {
+  const annee = (f.chirurgieAnnee ?? '').trim()
+  return [(f.chirurgieType ?? '').trim(), annee && `Durée / année : ${annee}`].filter(Boolean).join(' ; ')
+}
+function traitementAnterieurTexte(choix: boolean | null | undefined, f: any): string | null {
+  if (choix === false) return 'NON'
+  const duree = (f.traitementDuree ?? '').trim()
+  const dose = (f.traitementDose ?? '').trim()
+  const texte = [(f.traitementMedicaments ?? '').trim(), duree && `Durée : ${duree}`, dose && `Dose : ${dose}`]
+    .filter(Boolean)
+    .join(' ; ')
+  if (choix === true) return texte || 'OUI'
+  return texte || null
+}
+
+/** « Autres examens » : plusieurs valeurs dans un seul champ texte « A ; B ; C ». */
+function separerExamens(texte?: string | null): string[] {
+  return (texte ?? '')
+    .split(';')
+    .map((x) => x.trim())
+    .filter(Boolean)
+}
+
 export default function ConsultationScreen({ navigation }: { navigation: { goBack: () => void } }) {
   const { user } = useAuth()
   const cliniqueId = user?.clinique?.id ?? 1
@@ -54,6 +101,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   const [resultats, setResultats] = useState<PassageRef[]>([])
   const [passage, setPassage] = useState<PassageRef | null>(null)
   const [detail, setDetail] = useState<any>(null)
+  /** Patient de sexe masculin : la DDR et « Grossesse en cours » sont masquées. */
+  const patientMasculin = (detail?.passage?.patient?.sexe ?? passage?.patient?.sexe) === 'M'
   const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'examens' | 'reference' | 'certificat'>('fiche')
 
   useEffect(() => {
@@ -273,9 +322,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   }
 
   // ── Flux médecin : file d'attente / disponibilité ──
-  async function chargerFileMedecin() {
+  async function chargerFileMedecin(silencieux = false) {
     if (!estMedecin) return
-    setChargementFile(true)
+    if (!silencieux) setChargementFile(true)
     try {
       const { data } = await http.get('/consultations/moi', { params: { jour: aujourdhui() } })
       setDisponibilite(data.disponibilite ?? null)
@@ -298,7 +347,12 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   }, [estMedecin])
 
   useEffect(() => {
-    if (estMedecin && !passage) chargerFileMedecin()
+    if (!estMedecin || passage) return
+    chargerFileMedecin()
+    // Rafraîchissement automatique : les patients affectés après un paiement,
+    // un crédit ou un cas social apparaissent sans quitter l'écran.
+    const timer = setInterval(() => chargerFileMedecin(true), 30000)
+    return () => clearInterval(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [estMedecin, passage])
 
@@ -363,9 +417,14 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           hta: c.hta, diabete: c.diabete, tabac: c.tabac, alcool: c.alcool,
           grossesseEnCours: c.grossesseEnCours,
           ddr: c.ddr ?? '',
-          traitementAnterieur: c.traitementAnterieur ?? '',
+          // Oui / Non déduit du texte enregistré (« NON », « OUI » ou le commentaire)
+          traitementAnterieurOuiNon: traitementAnterieurChoix(c.traitementAnterieur),
+          traitementMedicaments: traitementAnterieurDetails(c.traitementAnterieur).medicaments,
+          traitementDuree: traitementAnterieurDetails(c.traitementAnterieur).duree,
+          traitementDose: traitementAnterieurDetails(c.traitementAnterieur).dose,
           antecedentsMedicaux: c.antecedentsMedicaux ?? '',
-          antecedentsChirurgicaux: c.antecedentsChirurgicaux ?? '',
+          chirurgieType: chirurgieDetails(c.antecedentsChirurgicaux).type,
+          chirurgieAnnee: chirurgieDetails(c.antecedentsChirurgicaux).annee,
           pathologiesAssociees: c.pathologiesAssociees ?? '',
           typeSuivi: c.typeSuivi ?? '',
           consultantType: c.consultantType ?? '',
@@ -400,7 +459,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           typePopulation: pc.typePopulation ?? '',
           populationsRisque: pc.populationsRisque ?? '',
           protectionSociale: pc.protectionSociale ?? '',
-          residenceHabituelle: pc.residenceHabituelle ?? '',
+          residenceHabituelle: pc.residenceHabituelle ?? pc.ville ?? '',
           residenceActuelle: pc.residenceActuelle ?? '',
           hospitalisation: c.hospitalisation ?? false,
           chirurgie: c.chirurgie ?? (c.antecedentsChirurgicaux ? true : null),
@@ -429,15 +488,20 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     MOTIF: '/motifs',
     ANTECEDENT: '/antecedents-medicaux',
     EXAMEN: '/autres-examens',
+    INTERVENTION: '/interventions-chirurgicales',
   }
 
   async function chargerListes() {
     try {
       const codes = Object.keys(ROUTES_LISTES)
-      const reps = await Promise.all(codes.map((c) => http.get(ROUTES_LISTES[c], { params: { cliniqueId } })))
+      // allSettled : une liste indisponible ne vide pas toutes les autres
+      const reps = await Promise.allSettled(codes.map((c) => http.get(ROUTES_LISTES[c], { params: { cliniqueId } })))
       const out: Record<string, { value: string; label: string }[]> = {}
       codes.forEach((c, i) => {
-        out[c.toLowerCase()] = ((reps[i].data ?? []) as any[]).map((x) => ({ value: x.libelle, label: x.libelle }))
+        const r = reps[i]
+        out[c.toLowerCase()] = r.status === 'fulfilled'
+          ? ((r.value.data ?? []) as any[]).map((x) => ({ value: x.libelle, label: x.libelle }))
+          : []
       })
       setListes(out)
     } catch {
@@ -475,11 +539,12 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         diabete: fiche.diabete,
         tabac: fiche.tabac,
         alcool: fiche.alcool,
-        grossesseEnCours: fiche.grossesseEnCours,
-        ddr: vider(fiche.ddr),
-        traitementAnterieur: vider(fiche.traitementAnterieur),
+        // Patient masculin : ces deux informations ne sont pas enregistrées
+        grossesseEnCours: patientMasculin ? null : fiche.grossesseEnCours,
+        ddr: patientMasculin ? null : vider(fiche.ddr),
+        traitementAnterieur: traitementAnterieurTexte(fiche.traitementAnterieurOuiNon, fiche),
         antecedentsMedicaux: vider(fiche.antecedentsMedicaux),
-        antecedentsChirurgicaux: fiche.chirurgie === false ? null : vider(fiche.antecedentsChirurgicaux),
+        antecedentsChirurgicaux: fiche.chirurgie === false ? null : vider(chirurgieTexte(fiche)),
         pathologiesAssociees: vider(fiche.pathologiesAssociees),
         typeSuivi: vider(fiche.typeSuivi),
         consultantType: vider(fiche.consultantType),
@@ -540,7 +605,8 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       alimenterListe('PROFESSION', fiche.profession)
       alimenterListe('MOTIF', fiche.motif)
       alimenterListe('ANTECEDENT', fiche.antecedentsMedicaux)
-      alimenterListe('EXAMEN', fiche.autresExamens)
+      if (fiche.chirurgie === true) alimenterListe('INTERVENTION', fiche.chirurgieType)
+      separerExamens(fiche.autresExamens).forEach((ex) => alimenterListe('EXAMEN', ex))
       await chargerDetail(passage.id)
       chargerListes()
     } catch (e: any) {
@@ -813,7 +879,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         {!passage ? (
           <TextInput
             style={styles.recherche}
-            placeholder="Rechercher par code patient ou N° d'ordre…"
+            placeholder="Nom et prénoms, code patient ou N° d'ordre…"
             placeholderTextColor="#94a3b8"
             value={recherche}
             onChangeText={setRecherche}
@@ -847,6 +913,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
               {vueMedecin === 'file' ? (
                 <>
+                  <View style={{ alignItems: 'flex-end', marginBottom: 8 }}>
+                    <Btn title="🔄 Actualiser" small variant="outline" onPress={() => chargerFileMedecin()} />
+                  </View>
                   {chargementFile ? <EtatVide texte="Chargement…" image={false} /> : null}
                   {!chargementFile && fileMedecin.enAttente.length === 0 ? (
                     <EtatVide
@@ -993,15 +1062,36 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   <Chips options={['Oui', 'Non']} value={fiche.tabac == null ? null : fiche.tabac ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, tabac: v === 'Oui' })} />
                   <Text style={styles.label}>Alcool</Text>
                   <Chips options={['Oui', 'Non']} value={fiche.alcool == null ? null : fiche.alcool ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, alcool: v === 'Oui' })} />
-                  <Text style={styles.label}>Grossesse en cours</Text>
-                  <Chips options={['Oui', 'Non']} value={fiche.grossesseEnCours == null ? null : fiche.grossesseEnCours ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, grossesseEnCours: v === 'Oui' })} />
-                  <Input label="DDR (date des dernières règles)" value={fiche.ddr ?? ''} onChangeText={(t) => setFiche({ ...fiche, ddr: t })} placeholder="AAAA-MM-JJ" />
-                  <Input label="Traitement antérieur" value={fiche.traitementAnterieur ?? ''} onChangeText={(t) => setFiche({ ...fiche, traitementAnterieur: t })} />
+                  {/* DDR et grossesse : sans objet pour un patient de sexe masculin */}
+                  {!patientMasculin ? (
+                    <>
+                      <Text style={styles.label}>Grossesse en cours</Text>
+                      <Chips options={['Oui', 'Non']} value={fiche.grossesseEnCours == null ? null : fiche.grossesseEnCours ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, grossesseEnCours: v === 'Oui' })} />
+                      <Input label="DDR (date des dernières règles)" value={fiche.ddr ?? ''} onChangeText={(t) => setFiche({ ...fiche, ddr: t })} placeholder="AAAA-MM-JJ" />
+                    </>
+                  ) : null}
+                  <Text style={styles.label}>Traitement médicamenteux antérieur / en cours</Text>
+                  <Chips
+                    options={['Oui', 'Non']}
+                    value={fiche.traitementAnterieurOuiNon == null ? null : fiche.traitementAnterieurOuiNon ? 'Oui' : 'Non'}
+                    onChange={(v) => setFiche({ ...fiche, traitementAnterieurOuiNon: v === 'Oui' })}
+                  />
+                  {/* Les trois champs n'apparaissent que si le médecin répond « Oui » */}
+                  {fiche.traitementAnterieurOuiNon === true ? (
+                    <>
+                      <Input label="Médicaments" value={fiche.traitementMedicaments ?? ''} onChangeText={(t) => setFiche({ ...fiche, traitementMedicaments: t })} placeholder="Ex : Paracétamol, Amlodipine" />
+                      <Input label="Durée" value={fiche.traitementDuree ?? ''} onChangeText={(t) => setFiche({ ...fiche, traitementDuree: t })} placeholder="Ex : depuis 2 mois" />
+                      <Input label="Dose" value={fiche.traitementDose ?? ''} onChangeText={(t) => setFiche({ ...fiche, traitementDose: t })} placeholder="Ex : 1 cp matin et soir" />
+                    </>
+                  ) : null}
                   <ListeCombo label="Antécédents médicaux (maladies)" value={fiche.antecedentsMedicaux ?? ''} options={listes.antecedent ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, antecedentsMedicaux: v })} />
                   <Text style={styles.label}>Antécédents chirurgicaux</Text>
                   <Chips options={['Oui', 'Non']} value={fiche.chirurgie == null ? null : fiche.chirurgie ? 'Oui' : 'Non'} onChange={(v) => setFiche({ ...fiche, chirurgie: v === 'Oui' })} />
                   {fiche.chirurgie === true ? (
-                    <Input label="Préciser" value={fiche.antecedentsChirurgicaux ?? ''} onChangeText={(t) => setFiche({ ...fiche, antecedentsChirurgicaux: t })} placeholder="Intervention, année…" />
+                    <>
+                      <ListeCombo label="Type d'intervention" value={fiche.chirurgieType ?? ''} options={listes.intervention ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, chirurgieType: v })} />
+                      <Input label="Durée / année" value={fiche.chirurgieAnnee ?? ''} onChangeText={(t) => setFiche({ ...fiche, chirurgieAnnee: t })} placeholder="Ex : 2019, il y a 5 ans" />
+                    </>
                   ) : null}
                 </Card>
                 <Card>
@@ -1063,7 +1153,23 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                   {testsOrdonnance.length > 0 ? (
                     <Text style={styles.note}>🧾 Inscrits sur l'ordonnance à l'enregistrement : {testsOrdonnance.join(', ')}</Text>
                   ) : null}
-                  <ListeCombo label="Autres examens" value={fiche.autresExamens ?? ''} options={listes.examen ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, autresExamens: v })} />
+                  {/* Liste déroulante à cases à cocher : tous les examens cochés sont enregistrés (« A ; B ; C ») */}
+                  <ListeCombo
+                    label="Autres examens"
+                    multiple
+                    value={fiche.autresExamens ?? ''}
+                    options={[
+                      // Examens du catalogue (labo / imagerie) : prescrits automatiquement à l'enregistrement
+                      ...prestations
+                        .filter((x: any) => x.actif && ['EXAMEN_LABO', 'IMAGERIE'].includes(x.type))
+                        .map((x: any) => ({ value: `p${x.id}`, label: String(x.libelle) })),
+                      ...(listes.examen ?? []).filter(
+                        (o: any) => !prestations.some((x: any) => String(x.libelle).toUpperCase() === String(o.label).toUpperCase()),
+                      ),
+                    ]}
+                    placeholder="— Cocher un ou plusieurs examens —"
+                    onChange={(v) => setFiche({ ...fiche, autresExamens: v })}
+                  />
                   {/* Le diagnostic se retient après les examens */}
                   <ListeCombo label="Diagnostic retenu" value={fiche.diagnostic ?? ''} options={listes.diagnostic ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, diagnostic: v })} />
                   <ListeCombo label="Pathologies associées" value={fiche.pathologiesAssociees ?? ''} options={listes.pathologie ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setFiche({ ...fiche, pathologiesAssociees: v })} />
@@ -1499,7 +1605,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
               <Text style={styles.note}>
                 <Text style={{ fontWeight: '800' }}>💊 Ordonnance : </Text>
                 {(histoDetail.medicaments as any[])
-                  .map((m) => `${m.nom} — ${m.posologie ?? '—'} (${m.quantite ?? '—'}, ${m.duree ?? '—'})`)
+                  .map((m) => `${m.medicamentNom ?? m.nom ?? '—'} — ${m.posologie ?? '—'} (${m.quantite ?? '—'}, ${m.duree ?? '—'})`)
                   .join('\n• ')}
               </Text>
             ) : (

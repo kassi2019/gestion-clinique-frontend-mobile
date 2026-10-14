@@ -28,7 +28,8 @@ type PassageRef = {
   id: number
   numeroOrdre: string
   patient: { nom: string; prenom: string; code?: string }
-  consultations?: any[]
+  /** Une entrée par ordonnance (une consultation peut en porter plusieurs). */
+  ordonnances?: any[]
 }
 
 export default function PharmacieScreen({
@@ -478,15 +479,10 @@ export default function PharmacieScreen({
     }
   }
 
-  async function choisirOrdonnance(p: PassageRef) {
+  async function choisirOrdonnance(o: { id: number }) {
     setRecu(null)
     try {
-      const consultation = p.consultations?.[0]
-      if (!consultation) {
-        Alert.alert('Pharmacie', 'Aucune ordonnance pour ce passage.')
-        return
-      }
-      const { data } = await http.get(`/pharmacie/consultations/${consultation.id}`)
+      const { data } = await http.get(`/pharmacie/ordonnances/${o.id}`)
       setOrdonnance(data)
       const q: Record<number, string> = {}
       for (const pres of data.prescriptions ?? []) q[pres.id] = '0'
@@ -522,7 +518,7 @@ export default function PharmacieScreen({
         onPress: async () => {
           setEnCours(true)
           try {
-            const d = await http.post(`/pharmacie/dispensations/${ordonnance.consultation.id}`, { lignes })
+            const d = await http.post(`/pharmacie/ordonnances/${ordonnance.ordonnance.id}/dispenser`, { lignes })
             const dispensationId = d.data.id ?? d.data.dispensation?.id
             const pay = await http.post(`/pharmacie/dispensations/${dispensationId}/payer`, { modePaiement })
             Alert.alert('✅ Dispensation encaissée', `Reçu ${pay.data.numeroRecu ?? ''}`)
@@ -560,7 +556,7 @@ export default function PharmacieScreen({
         {!ordonnance ? (
           <TextInput
             style={styles.recherche}
-            placeholder="Rechercher par code patient, nom ou N° d'ordre…"
+            placeholder="N° d'ordonnance, nom, code patient ou N° d'ordre…"
             placeholderTextColor="#94a3b8"
             value={recherche}
             onChangeText={setRecherche}
@@ -669,16 +665,20 @@ export default function PharmacieScreen({
 
           {ongletPharma === 'ordonnances' ? (
             <>
-              {resultats.map((r) => (
-                <TouchableOpacity key={r.id} style={styles.item} onPress={() => choisirOrdonnance(r)}>
-                  <Text style={styles.itemTitre}>
-                    {r.patient.nom} {r.patient.prenom}
-                  </Text>
-                  <Text style={styles.itemSous}>
-                    {r.numeroOrdre} · {r.consultations?.length ?? 0} ordonnance(s)
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {/* Une ligne par ordonnance : chacune se traite et se paie séparément */}
+              {resultats.flatMap((r) =>
+                (r.ordonnances ?? []).map((o: any) => (
+                  <TouchableOpacity key={o.id} style={styles.item} onPress={() => choisirOrdonnance(o)}>
+                    <Text style={styles.itemTitre}>
+                      {r.patient.nom} {r.patient.prenom}
+                    </Text>
+                    <Text style={styles.itemSous}>
+                      {r.numeroOrdre} · {o.numeroOrdonnance} · {o.medicaments?.length ?? 0} médicament(s) ·{' '}
+                      {o.ordonnanceStatut === 'TRAITEE' ? 'traitée' : 'en attente'}
+                    </Text>
+                  </TouchableOpacity>
+                )),
+              )}
               {dispensees.length > 0 ? (
                 <Card>
                   <SectionTitle>Dispensées récemment</SectionTitle>

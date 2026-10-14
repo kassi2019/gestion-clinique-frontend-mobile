@@ -47,6 +47,8 @@ type PassageJour = {
     sexe?: string
     telephone?: string
     ville?: string
+    residenceHabituelle?: string
+    residenceActuelle?: string
     quartier?: string
     profession?: string
   }
@@ -172,6 +174,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   const [sexe, setSexe] = useState('')
   const [telephone, setTelephone] = useState('')
   const [ville, setVille] = useState('')
+  const [residenceActuelle, setResidenceActuelle] = useState('')
   const [quartier, setQuartier] = useState('')
   const [profession, setProfession] = useState('')
   const [motif, setMotif] = useState('')
@@ -224,6 +227,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
     sexe: '',
     telephone: '',
     ville: '',
+    residenceActuelle: '',
     quartier: '',
     profession: '',
     serviceId: null as number | null,
@@ -557,6 +561,9 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           sexe: sexe || undefined,
           telephone: telephone || undefined,
           ville: ville || undefined,
+          // Reprises automatiquement dans la fiche de consultation
+          residenceHabituelle: ville || undefined,
+          residenceActuelle: residenceActuelle || undefined,
           quartier: quartier || undefined,
           profession: profession || undefined,
         }
@@ -569,7 +576,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       await imprimerTicket(data.id, data.numeroOrdre)
       // Réinitialiser
       setNom(''); setPrenom(''); setAge(''); setDateNaissance(''); setCni(''); setCmu(''); setSexe(''); setTelephone('')
-      setVille(''); setQuartier(''); setProfession(''); setMotif('')
+      setVille(''); setResidenceActuelle(''); setQuartier(''); setProfession(''); setMotif('')
       setDoublons([])
       setPatientChoisi(null); setRecherchePatient(''); setResultatsPatients([])
       setServiceId(null); setTypePatient('INTERNE'); setReferent(''); setPrestationDemandee('')
@@ -673,7 +680,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       numeroCmu: p.patient?.numeroCmu ?? '',
       sexe: p.patient?.sexe ?? '',
       telephone: p.patient?.telephone ?? '',
-      ville: p.patient?.ville ?? '',
+      ville: p.patient?.residenceHabituelle ?? p.patient?.ville ?? '',
+      residenceActuelle: p.patient?.residenceActuelle ?? '',
       quartier: p.patient?.quartier ?? '',
       profession: p.patient?.profession ?? '',
       serviceId: p.serviceId ?? null,
@@ -705,6 +713,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           sexe: modifForm.sexe || undefined,
           telephone: modifForm.telephone || undefined,
           ville: modifForm.ville || undefined,
+          residenceHabituelle: modifForm.ville || undefined,
+          residenceActuelle: modifForm.residenceActuelle || undefined,
           quartier: modifForm.quartier || undefined,
           profession: modifForm.profession || undefined,
         },
@@ -1007,11 +1017,19 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                   keyboardType="phone-pad"
                 />
                 <ListeCombo
-                  label="Résidence"
+                  label="Résidence habituelle"
                   value={ville}
                   options={listes.residence}
                   placeholder="— Choisir une ville —"
                   onChange={setVille}
+                  ajouter={(v) => ajouterListe('residence', v)}
+                />
+                <ListeCombo
+                  label="Résidence actuelle"
+                  value={residenceActuelle}
+                  options={listes.residence}
+                  placeholder="— Où le patient loge en ce moment —"
+                  onChange={setResidenceActuelle}
                   ajouter={(v) => ajouterListe('residence', v)}
                 />
                 <View style={styles.ligne}>
@@ -1565,11 +1583,19 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           </View>
           <View style={styles.ligneItem}>
             <ListeCombo
-              label="Résidence"
+              label="Résidence habituelle"
               value={modifForm.ville}
               options={listes.residence}
               placeholder="— Choisir —"
               onChange={(v) => setModifForm({ ...modifForm, ville: v })}
+              ajouter={(v) => ajouterListe('residence', v)}
+            />
+            <ListeCombo
+              label="Résidence actuelle"
+              value={modifForm.residenceActuelle}
+              options={listes.residence}
+              placeholder="— Où le patient loge en ce moment —"
+              onChange={(v) => setModifForm({ ...modifForm, residenceActuelle: v })}
               ajouter={(v) => ajouterListe('residence', v)}
             />
           </View>
