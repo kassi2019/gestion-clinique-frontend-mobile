@@ -16,7 +16,14 @@ import { ApercuTexte, Badge, Btn, Card, Chips, InfoLigne, Input, Modale, Onglets
   BoutonBascule,
 } from '../components/ui'
 import ListeSelect from '../components/ListeSelect'
+import ListeCombo from '../components/ListeCombo'
 import DateField from '../components/DateField'
+import { h, imprimerA4 } from '../impressionA4'
+
+const aujourdhuiIso = () => {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 const MODES = [
   { value: 'ESPECES', label: '💵 Espèces' },
@@ -71,7 +78,10 @@ export default function PharmacieScreen({
   const [alertes, setAlertes] = useState<{ stockBas: any[]; peremptions: any[] }>({ stockBas: [], peremptions: [] })
   const [consommables, setConsommables] = useState<any[]>([])
   const [dispensees, setDispensees] = useState<any[]>([])
-  const [modaleEntree, setModaleEntree] = useState<{ med: any; numeroLot: string; quantite: string; datePeremption: string; prixAchat: string } | null>(null)
+  const [modaleEntree, setModaleEntree] = useState<{ med: any; numeroLot: string; quantite: string; datePeremption: string; prixAchat: string; fournisseur: string } | null>(null)
+  const [fournisseurs, setFournisseurs] = useState<{ value: string; label: string }[]>([])
+  // Fiche d'inventaire (récapitulatif des lots comptés, imprimable A4)
+  const [ficheInv, setFicheInv] = useState<{ debut: string; fin: string; donnees: any; chargement: boolean } | null>(null)
   const [modaleInventaire, setModaleInventaire] = useState<{ med: any; quantiteReelle: string; commentaire: string } | null>(null)
   const [modaleMouvements, setModaleMouvements] = useState<{ med: any; liste: any[] } | null>(null)
   const [modaleConso, setModaleConso] = useState<{ item: any; type: 'ENTREE' | 'SORTIE'; quantite: string; commentaire: string } | null>(null)
@@ -302,7 +312,96 @@ export default function PharmacieScreen({
 
   // ── Actions stocks ──
   function ouvrirEntree(med: any) {
-    setModaleEntree({ med, numeroLot: '', quantite: '', datePeremption: '', prixAchat: '' })
+    setModaleEntree({ med, numeroLot: '', quantite: '', datePeremption: '', prixAchat: '', fournisseur: '' })
+    chargerFournisseurs()
+  }
+
+  // ── Fiche d'inventaire ──
+  async function chargerFicheInventaire(debut: string, fin: string) {
+    setFicheInv((f) => ({ debut, fin, donnees: f?.donnees ?? null, chargement: true }))
+    try {
+      const { data } = await http.get('/pharmacie/inventaires/fiche', { params: { cliniqueId, debut, fin } })
+      setFicheInv({ debut, fin, donnees: data, chargement: false })
+    } catch (e: any) {
+      setFicheInv({ debut, fin, donnees: null, chargement: false })
+      Alert.alert('Erreur', e.response?.data?.message ?? "Fiche d'inventaire indisponible.")
+    }
+  }
+
+  function imprimerFicheInventaire() {
+    if (!ficheInv?.donnees) return
+    const { lignes, resume } = ficheInv.donnees
+    const jour = (iso: string) => iso.split('-').reverse().join('/')
+    const date = (d: string | null) => (d ? new Date(d).toLocaleDateString('fr-FR') : '—')
+    const f = (n: number) => Number(n ?? 0).toLocaleString('fr-FR')
+    const periode =
+      ficheInv.debut === ficheInv.fin
+        ? `Inventaire du ${jour(ficheInv.debut)}`
+        : `Inventaire du ${jour(ficheInv.debut)} au ${jour(ficheInv.fin)}`
+    imprimerA4(`
+      <h1>${h(user?.clinique?.nom ?? '')}</h1>
+      <h2>FICHE D'INVENTAIRE — PHARMACIE</h2>
+      <p class="centre">${h(periode)}</p>
+      <table>
+        <tr>
+          <td>Lots comptés : <b>${resume.lotsComptes}</b></td>
+          <td>Conformes : <b>${resume.lotsConformes}</b></td>
+          <td>Avec écart : <b>${resume.lotsAvecEcart}</b></td>
+        </tr>
+        <tr>
+          <td>Quantités manquantes : <b>${resume.manquants}</b></td>
+          <td>Quantités en excédent : <b>+${resume.excedents}</b></td>
+          <td>Valeur des écarts : <b>${f(resume.valeurEcarts)} F</b></td>
+        </tr>
+        <tr><td colspan="3">Inventaire réalisé par : <b>${h((resume.agents ?? []).join(', '))}</b></td></tr>
+      </table>
+      <table>
+        <thead><tr>
+          <th>N°</th><th>Médicament</th><th>Lot</th><th>Péremption</th><th>Stock théorique</th>
+          <th>Stock compté</th><th>Écart</th><th>Valeur de l'écart</th>
+        </tr></thead>
+        <tbody>
+          ${lignes
+            .map(
+              (l: any, i: number) => `<tr>
+                <td>${i + 1}</td><td>${h(l.medicament)}</td><td>${h(l.lot)}</td><td>${date(l.peremption)}</td>
+                <td class="num">${l.stockAvant ?? '—'}</td><td class="num">${l.stockApres ?? '—'}</td>
+                <td class="num"><b>${l.ecart > 0 ? '+' : ''}${l.ecart}</b></td><td class="num">${f(l.valeurEcart)} F</td>
+              </tr>`,
+            )
+            .join('')}
+        </tbody>
+        <tfoot><tr class="total">
+          <td colspan="6">TOTAL DES ÉCARTS</td>
+          <td class="num">${resume.manquants + resume.excedents}</td><td class="num">${f(resume.valeurEcarts)} F</td>
+        </tr></tfoot>
+      </table>
+      <div class="sign">
+        <div>Le responsable de la pharmacie<br /><small>Nom, signature et date</small></div>
+        <div>Le contrôleur / gestionnaire<br /><small>Nom, signature et date</small></div>
+      </div>
+      <p class="pied">Imprimé le ${new Date().toLocaleString('fr-FR')}</p>
+    `)
+  }
+
+  // ── Réimpression du reçu d'une dispensation ──
+  async function imprimerRecuPharmacie(paiementId: number) {
+    try {
+      const { data } = await http.post(`/impression/pharmacie-paiements/${paiementId}`)
+      if (data.contenu) setRecu(data.contenu)
+      Alert.alert('🖨️ Reçu', data.message ?? 'Reçu envoyé à l’imprimante du poste.')
+    } catch (e: any) {
+      Alert.alert('Impression', e.response?.data?.message ?? 'Impression impossible.')
+    }
+  }
+
+  async function chargerFournisseurs() {
+    try {
+      const { data } = await http.get('/fournisseurs', { params: { cliniqueId } })
+      setFournisseurs((data ?? []).map((f: any) => ({ value: f.libelle, label: f.libelle })))
+    } catch {
+      setFournisseurs([])
+    }
   }
 
   async function enregistrerEntree() {
@@ -319,7 +418,16 @@ export default function PharmacieScreen({
         quantite: Number(modaleEntree.quantite),
         datePeremption: modaleEntree.datePeremption,
         prixAchat: modaleEntree.prixAchat ? Number(modaleEntree.prixAchat) : undefined,
+        fournisseur: modaleEntree.fournisseur.trim() || undefined,
       })
+      // Fournisseur saisi librement : ajouté automatiquement à la liste
+      if (modaleEntree.fournisseur.trim()) {
+        try {
+          await http.post('/fournisseurs', { cliniqueId, libelle: modaleEntree.fournisseur.trim() })
+        } catch {
+          /* facultatif */
+        }
+      }
       Alert.alert('✅ Entrée enregistrée')
       setModaleEntree(null)
       chargerAlertes()
@@ -887,12 +995,23 @@ export default function PharmacieScreen({
               />
 
               {sousOnglet === 'inventaire' ? (
-                <Btn
-                  title={`✅ Valider tout l’inventaire (${nbSaisies()})`}
-                  variant="outline"
-                  disabled={nbSaisies() === 0}
-                  onPress={validerInventaireGlobal}
-                />
+                <View style={styles.reglementsSpeciaux}>
+                  <View style={{ flex: 1 }}>
+                    <Btn
+                      title={`✅ Valider tout (${nbSaisies()})`}
+                      variant="outline"
+                      disabled={nbSaisies() === 0}
+                      onPress={validerInventaireGlobal}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Btn
+                      title="🖨️ Fiche d'inventaire"
+                      variant="outline"
+                      onPress={() => chargerFicheInventaire(aujourdhuiIso(), aujourdhuiIso())}
+                    />
+                  </View>
+                </View>
               ) : null}
 
               <Input
@@ -1110,6 +1229,44 @@ export default function PharmacieScreen({
             </View>
           </Card>
 
+          {/* Dispensations déjà faites sur cette ordonnance (réimpression du reçu) */}
+          <Card>
+            <SectionTitle>Dispensations de cette ordonnance</SectionTitle>
+            {(ordonnance.dispensations ?? []).length === 0 ? (
+              <Text style={styles.itemSous}>Aucune dispensation enregistrée.</Text>
+            ) : (
+              (ordonnance.dispensations ?? []).map((d: any) => (
+                <View key={d.id} style={[styles.item, styles.itemLigne]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.itemTitre}>
+                      {new Date(d.createdAt).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      {' · '}
+                      {Number(d.montantTotal ?? 0).toLocaleString('fr-FR')} FCFA
+                    </Text>
+                    <Text style={styles.itemSous}>
+                      {(d.lignes ?? [])
+                        .map((l: any) => `${l.medicamentNom} x${l.quantiteDelivree} ${l.uniteVente === 'PLAQUE' ? 'plaque(s)' : 'boîte(s)'}`)
+                        .join(', ')}
+                    </Text>
+                    <View style={styles.badges}>
+                      <Text style={styles.itemSous}>{d.paiement?.numeroRecu ?? '—'}</Text>
+                      {d.paiement?.type === 'CREDIT' ? (
+                        <Badge label={d.paiement.regleLe ? 'Crédit réglé' : 'Crédit'} tone="warning" />
+                      ) : d.paiement?.type === 'CAS_SOCIAL' ? (
+                        <Badge label="Cas social" tone="muted" />
+                      ) : null}
+                      {Number(d.paiement?.montantAssurance) > 0 ? <Badge label="Assurance" tone="success" /> : null}
+                      <Badge label={d.statut === 'CLOTUREE' ? 'Clôturée' : 'En cours'} tone={d.statut === 'CLOTUREE' ? 'success' : 'warning'} />
+                    </View>
+                  </View>
+                  {d.paiement ? (
+                    <Btn title="🖨️ Reçu" small variant="outline" onPress={() => imprimerRecuPharmacie(d.paiement.id)} />
+                  ) : null}
+                </View>
+              ))
+            )}
+          </Card>
+
           {recu ? <ApercuTexte contenu={recu} /> : null}
         </ScrollView>
       )}
@@ -1155,6 +1312,79 @@ export default function PharmacieScreen({
         <Input label="Quantité *" value={modaleEntree?.quantite ?? ''} onChangeText={(t) => modaleEntree && setModaleEntree({ ...modaleEntree, quantite: t })} keyboardType="numeric" />
         <Input label="Date de péremption * (AAAA-MM-JJ)" value={modaleEntree?.datePeremption ?? ''} onChangeText={(t) => modaleEntree && setModaleEntree({ ...modaleEntree, datePeremption: t })} />
         <Input label="Prix d'achat (F)" value={modaleEntree?.prixAchat ?? ''} onChangeText={(t) => modaleEntree && setModaleEntree({ ...modaleEntree, prixAchat: t })} keyboardType="numeric" />
+        <ListeCombo
+          label="Fournisseur"
+          value={modaleEntree?.fournisseur ?? ''}
+          options={fournisseurs}
+          placeholder="Ex : COPHARMED, Laborex…"
+          onChange={(v) => modaleEntree && setModaleEntree({ ...modaleEntree, fournisseur: v })}
+        />
+        <Text style={styles.itemSous}>Nouveau fournisseur ? Il sera ajouté automatiquement à la liste.</Text>
+      </Modale>
+
+      {/* Modale : fiche d'inventaire (récapitulatif imprimable A4) */}
+      <Modale
+        visible={ficheInv !== null}
+        titre="🖨️ Fiche d'inventaire"
+        onFermer={() => setFicheInv(null)}
+        actions={
+          <>
+            <Btn title="Fermer" variant="outline" onPress={() => setFicheInv(null)} />
+            <Btn
+              title="🖨️ Imprimer (A4)"
+              onPress={imprimerFicheInventaire}
+              disabled={!ficheInv?.donnees?.lignes?.length}
+            />
+          </>
+        }
+      >
+        <View style={styles.reglementsSpeciaux}>
+          <View style={{ flex: 1 }}>
+            <DateField label="Du" value={ficheInv?.debut ?? ''} onChange={(v) => ficheInv && chargerFicheInventaire(v, ficheInv.fin)} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <DateField label="Au" value={ficheInv?.fin ?? ''} onChange={(v) => ficheInv && chargerFicheInventaire(ficheInv.debut, v)} />
+          </View>
+        </View>
+        {ficheInv?.chargement ? (
+          <Text style={styles.itemSous}>Chargement…</Text>
+        ) : !ficheInv?.donnees?.lignes?.length ? (
+          <EtatVide texte="Aucun lot compté sur cette période. Validez d'abord l'inventaire, puis revenez ici." />
+        ) : (
+          <>
+            <Card>
+              <Text style={styles.itemSous}>
+                {ficheInv.donnees.resume.lotsComptes} lot(s) compté(s) · {ficheInv.donnees.resume.lotsConformes} conforme(s) ·{' '}
+                {ficheInv.donnees.resume.lotsAvecEcart} avec écart
+              </Text>
+              <Text style={styles.itemSous}>
+                Manquants : {ficheInv.donnees.resume.manquants} · Excédents : +{ficheInv.donnees.resume.excedents}
+              </Text>
+              <Text style={styles.itemTitre}>
+                Valeur des écarts : {Number(ficheInv.donnees.resume.valeurEcarts).toLocaleString('fr-FR')} F
+              </Text>
+            </Card>
+            {ficheInv.donnees.lignes.map((l: any) => (
+              <View key={l.id} style={[styles.item, styles.itemLigne]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.itemTitre}>{l.medicament}</Text>
+                  <Text style={styles.itemSous}>
+                    Lot {l.lot}
+                    {l.peremption ? ` · pér. ${new Date(l.peremption).toLocaleDateString('fr-FR')}` : ''} · théorique{' '}
+                    {l.stockAvant ?? '—'} → compté {l.stockApres ?? '—'}
+                  </Text>
+                  <Text style={styles.itemSous}>
+                    Valeur de l'écart : {Number(l.valeurEcart).toLocaleString('fr-FR')} F · par {l.par}
+                  </Text>
+                </View>
+                <Badge
+                  label={`${l.ecart > 0 ? '+' : ''}${l.ecart}`}
+                  tone={l.ecart === 0 ? 'success' : l.ecart > 0 ? 'warning' : 'danger'}
+                />
+              </View>
+            ))}
+          </>
+        )}
       </Modale>
 
       {/* Modale : inventaire */}
@@ -1460,6 +1690,8 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   item: { borderBottomColor: colors.border, borderBottomWidth: 1, paddingVertical: 12 },
+  itemLigne: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginTop: 4 },
   itemTitre: { fontSize: 15, fontWeight: '700', color: colors.text },
   itemSous: { fontSize: 12.5, color: colors.textMuted, marginTop: 2 },
   actionsLigne: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },

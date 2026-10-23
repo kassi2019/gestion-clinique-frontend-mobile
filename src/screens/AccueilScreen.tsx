@@ -18,6 +18,7 @@ import {
   Badge,
   Btn,
   Card,
+  Chips,
   InfoLigne,
   Input,
   Modale,
@@ -198,7 +199,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   const [filtreFin, setFiltreFin] = useState('')
   const [compteurs, setCompteurs] = useState({ attente: 0, terminee: 0, jour: 0 })
 
-  // ── Assurance patient (patient existant) ──
+  // ── Assurance patient (patient existant, ou nouveau patient : rattachée après création du passage) ──
+  const [assureNouveau, setAssureNouveau] = useState(false)
   const [assuranceVisible, setAssuranceVisible] = useState(false)
   const [assurances, setAssurances] = useState<
     { value: number; label: string; formules: { id: number; libelle: string }[] }[]
@@ -536,6 +538,11 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       Alert.alert('Consultation', 'Choisissez le type de consultation.')
       return
     }
+    const assuranceARattacher = modePatient === 'nouveau' && assureNouveau
+    if (assuranceARattacher && (!assuranceId || !formuleId)) {
+      Alert.alert('Assurance', 'Patient assuré : choisissez l\'assurance et la formule.')
+      return
+    }
     setSaving(true)
     try {
       const payload: any = {
@@ -569,11 +576,23 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         }
       }
       const { data } = await http.post('/accueil/passages', payload)
+      let messageAssurance = ''
+      if (assuranceARattacher) {
+        try {
+          await http.post(`/assurances/patients/${data.patientId}`, donneesAssurance())
+          messageAssurance = '\n🛡️ Patient rattaché à l\'assurance.'
+        } catch (e: any) {
+          // Le passage est créé : on ne bloque pas, on indique comment corriger.
+          messageAssurance = `\n⚠️ Assurance non rattachée (${e.response?.data?.message ?? 'erreur'}). Rattachez-la via « Patient existant » → 🛡️ Assurance.`
+        }
+      }
       Alert.alert(
         '✅ Passage créé',
-        `N° d'ordre : ${data.numeroOrdre}\nPatient : ${data.patient?.nom ?? ''} ${data.patient?.prenom ?? ''}\nCode patient : ${data.patient?.code ?? ''}`,
+        `N° d'ordre : ${data.numeroOrdre}\nPatient : ${data.patient?.nom ?? ''} ${data.patient?.prenom ?? ''}\nCode patient : ${data.patient?.code ?? ''}${messageAssurance}`,
       )
       await imprimerTicket(data.id, data.numeroOrdre)
+      setAssureNouveau(false)
+      viderAssurance()
       // Réinitialiser
       setNom(''); setPrenom(''); setAge(''); setDateNaissance(''); setCni(''); setCmu(''); setSexe(''); setTelephone('')
       setVille(''); setResidenceActuelle(''); setQuartier(''); setProfession(''); setMotif('')
@@ -592,29 +611,51 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   }
 
   // ── Assurance du patient (patient existant) ──
-  async function ouvrirAssurance() {
-    if (!patientChoisi) return
+  function viderAssurance() {
     setAssuranceId(null); setFormuleId(null)
     setNumeroAssure(''); setNumeroCarte(''); setNomAssurePrincipal('')
     setTypeBeneficiaire(null); setDebutCouverture(''); setFinCouverture('')
-    setAssuranceVisible(true)
+  }
+
+  function donneesAssurance() {
+    return {
+      assuranceId,
+      formuleId,
+      numeroAssure: numeroAssure.trim() || undefined,
+      numeroCarte: numeroCarte.trim() || undefined,
+      nomAssurePrincipal: nomAssurePrincipal.trim() || undefined,
+      typeBeneficiaire: typeBeneficiaire ?? undefined,
+      dateDebut: debutCouverture || undefined,
+      dateFin: finCouverture || undefined,
+    }
+  }
+
+  async function chargerAssurances() {
     try {
-      const [a, r] = await Promise.all([
-        http.get('/assurances', { params: { cliniqueId } }),
-        http.get(`/assurances/patients/${patientChoisi.id}`),
-      ])
+      const { data } = await http.get('/assurances', { params: { cliniqueId } })
       setAssurances(
-        (Array.isArray(a.data) ? a.data : a.data?.data ?? []).map((x: any) => ({
+        (Array.isArray(data) ? data : data?.data ?? []).map((x: any) => ({
           value: x.id,
           label: x.libelle ?? x.nom ?? '',
           formules: (x.formules ?? []).filter((f: any) => f.actif !== false),
         })),
       )
-      setRattachements(Array.isArray(r.data) ? r.data : r.data?.data ?? r.data?.rattachements ?? [])
     } catch {
       setAssurances([])
-      setRattachements([])
     }
+  }
+
+  // Nouveau patient : case « Le patient est assuré »
+  function basculerAssureNouveau(oui: boolean) {
+    setAssureNouveau(oui)
+    if (oui && assurances.length === 0) chargerAssurances()
+  }
+
+  async function ouvrirAssurance() {
+    if (!patientChoisi) return
+    viderAssurance()
+    setAssuranceVisible(true)
+    await Promise.all([chargerAssurances(), rechargerRattachements()])
   }
 
   async function rechargerRattachements() {
@@ -634,20 +675,9 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
     }
     setSavingAssurance(true)
     try {
-      await http.post(`/assurances/patients/${patientChoisi.id}`, {
-        assuranceId,
-        formuleId,
-        numeroAssure: numeroAssure.trim() || undefined,
-        numeroCarte: numeroCarte.trim() || undefined,
-        nomAssurePrincipal: nomAssurePrincipal.trim() || undefined,
-        typeBeneficiaire: typeBeneficiaire ?? undefined,
-        dateDebut: debutCouverture || undefined,
-        dateFin: finCouverture || undefined,
-      })
+      await http.post(`/assurances/patients/${patientChoisi.id}`, donneesAssurance())
       Alert.alert('✅ Assurance rattachée', 'Le patient est couvert — la caisse appliquera la formule automatiquement.')
-      setAssuranceId(null); setFormuleId(null)
-      setNumeroAssure(''); setNumeroCarte(''); setNomAssurePrincipal('')
-      setTypeBeneficiaire(null); setDebutCouverture(''); setFinCouverture('')
+      viderAssurance()
       await rechargerRattachements()
     } catch (e: any) {
       const msg = e.response?.data?.message
@@ -803,6 +833,60 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   )
 
   // ── Rendu ──
+  // Champs d'assurance : modale 🛡️ (patient existant) et formulaire du nouveau patient
+  const champsAssurance = (
+    <>
+      <Input label="Assurance *" required>
+        <ListeSelect
+          value={assuranceId}
+          options={assurances.map((a) => ({ value: a.value, label: a.label }))}
+          placeholder="— Choisir une assurance —"
+          onChange={(v) => {
+            setAssuranceId(v as number)
+            setFormuleId(null)
+          }}
+        />
+      </Input>
+      <Input label="Formule *" required>
+        <ListeSelect
+          value={formuleId}
+          options={(assurances.find((a) => a.value === assuranceId)?.formules ?? []).map((f) => ({
+            value: f.id,
+            label: f.libelle,
+          }))}
+          placeholder="— Choisir une formule —"
+          onChange={(v) => setFormuleId(v as number)}
+          disabled={!assuranceId}
+        />
+      </Input>
+      <Input label="N° d'assuré" value={numeroAssure} onChangeText={setNumeroAssure} />
+      <Input label="N° de carte" value={numeroCarte} onChangeText={setNumeroCarte} />
+      <Input label="Assuré principal" value={nomAssurePrincipal} onChangeText={setNomAssurePrincipal} />
+      <View style={{ marginBottom: 8 }}>
+        <Text style={styles.modalLabel}>Type de bénéficiaire</Text>
+        <View style={styles.chips}>
+          {['ASSURE', 'CONJOINT', 'ENFANT', 'AUTRE'].map((t) => (
+            <TouchableOpacity
+              key={t}
+              style={[styles.chip, typeBeneficiaire === t && styles.chipActif]}
+              onPress={() => setTypeBeneficiaire(typeBeneficiaire === t ? null : t)}
+            >
+              <Text style={[styles.chipTexte, typeBeneficiaire === t && styles.chipTexteActif]}>{t}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      </View>
+      <View style={styles.ligne}>
+        <View style={styles.ligneItem}>
+          <DateField label="Début de couverture" value={debutCouverture} onChange={setDebutCouverture} placeholder="— Date —" />
+        </View>
+        <View style={styles.ligneItem}>
+          <DateField label="Fin de couverture" value={finCouverture} onChange={setFinCouverture} placeholder="— Date —" />
+        </View>
+      </View>
+    </>
+  )
+
   return (
     <Screen>
       <View style={styles.bandeau}>
@@ -1054,6 +1138,16 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
                     />
                   </View>
                 </View>
+
+                {/* Assurance rattachée dès la création du patient (facultatif) */}
+                <SectionTitle>Assurance</SectionTitle>
+                <Text style={styles.modalLabel}>🛡️ Le patient est assuré ?</Text>
+                <Chips
+                  options={['Non', 'Oui']}
+                  value={assureNouveau ? 'Oui' : 'Non'}
+                  onChange={(v) => basculerAssureNouveau(v === 'Oui')}
+                />
+                {assureNouveau ? champsAssurance : null}
               </>
             )}
           </Card>
@@ -1353,93 +1447,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         }
         onFermer={() => setAssuranceVisible(false)}
       >
-        <Input label="Assurance *" required>
-          <ListeSelect
-            value={assuranceId}
-            options={assurances.map((a) => ({
-              value: a.value,
-              label: a.label,
-            }))}
-            placeholder="— Choisir une assurance —"
-            onChange={(v) => {
-              setAssuranceId(v as number);
-              setFormuleId(null);
-            }}
-          />
-        </Input>
-        <Input label="Formule *" required>
-          <ListeSelect
-            value={formuleId}
-            options={(
-              assurances.find((a) => a.value === assuranceId)?.formules ?? []
-            ).map((f) => ({
-              value: f.id,
-              label: f.libelle,
-            }))}
-            placeholder="— Choisir une formule —"
-            onChange={(v) => setFormuleId(v as number)}
-            disabled={!assuranceId}
-          />
-        </Input>
-        <Input
-          label="N° d'assuré"
-          value={numeroAssure}
-          onChangeText={setNumeroAssure}
-        />
-        <Input
-          label="N° de carte"
-          value={numeroCarte}
-          onChangeText={setNumeroCarte}
-        />
-        <Input
-          label="Assuré principal"
-          value={nomAssurePrincipal}
-          onChangeText={setNomAssurePrincipal}
-        />
-        <View style={{ marginBottom: 8 }}>
-          <Text style={styles.modalLabel}>Type de bénéficiaire</Text>
-          <View style={styles.chips}>
-            {["ASSURE", "CONJOINT", "ENFANT", "AUTRE"].map((t) => (
-              <TouchableOpacity
-                key={t}
-                style={[
-                  styles.chip,
-                  typeBeneficiaire === t && styles.chipActif,
-                ]}
-                onPress={() =>
-                  setTypeBeneficiaire(typeBeneficiaire === t ? null : t)
-                }
-              >
-                <Text
-                  style={[
-                    styles.chipTexte,
-                    typeBeneficiaire === t && styles.chipTexteActif,
-                  ]}
-                >
-                  {t}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-        <View style={styles.ligne}>
-          <View style={styles.ligneItem}>
-            <Input
-              label="Début de couverture"
-              value={debutCouverture}
-              onChangeText={setDebutCouverture}
-              placeholder="AAAA-MM-JJ"
-            />
-          </View>
-          <View style={styles.ligneItem}>
-            <Input
-              label="Fin de couverture"
-              value={finCouverture}
-              onChangeText={setFinCouverture}
-              placeholder="AAAA-MM-JJ"
-            />
-          </View>
-        </View>
+        {champsAssurance}
 
         <SectionTitle>Rattachements existants</SectionTitle>
         {rattachements.length === 0 ? (
