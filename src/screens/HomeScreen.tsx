@@ -36,13 +36,15 @@ const GROUPES = [
 export default function HomeScreen({ navigation }: { navigation: Nav }) {
   const { user, logout, canAccess, service, doitPrendreService, chargerService, prendreService, terminerService } = useAuth()
 
-  // Seuls les modules attribués au rôle sont affichés, rangés par thème
+  // Tous les modules sont affichés, rangés par thème ; ceux qui ne sont pas attribués au rôle restent grisés
   const groupes = GROUPES.map((g) => ({
     titre: g.titre,
     modules: g.codes
       .map((c) => MODULES.find((m) => m.code === c))
-      .filter((m): m is (typeof MODULES)[number] => !!m && canAccess(m.code)),
-  })).filter((g) => g.modules.length > 0)
+      .filter((m): m is (typeof MODULES)[number] => !!m)
+      .map((m) => ({ ...m, autorise: canAccess(m.code) })),
+  }))
+  const aucunModuleAttribue = !MODULES.some((m) => canAccess(m.code))
 
   // ── Pointage ──
   const [pointageEnCours, setPointageEnCours] = useState(false)
@@ -229,7 +231,7 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
           </TouchableOpacity>
         </View>
 
-        {groupes.length === 0 ? (
+        {aucunModuleAttribue ? (
           <Text style={styles.aucunModule}>Aucun module n'est attribué à votre rôle. Contactez l'administrateur.</Text>
         ) : null}
         {groupes.map((g) => (
@@ -239,15 +241,22 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
               {g.modules.map((m) => (
                 <TouchableOpacity
                   key={m.code}
-                  style={[styles.carte, doitPrendreService && styles.carteInactive]}
+                  style={[styles.carte, (!m.autorise || doitPrendreService) && styles.carteInactive]}
                   onPress={() => ouvrir(m)}
                   activeOpacity={0.7}
                 >
                   <View style={styles.carteIcone}>
                     <Text style={styles.carteIconeTexte}>{m.icon}</Text>
                   </View>
-                  <Text style={styles.carteLabel} numberOfLines={2}>{m.label}</Text>
-                  {doitPrendreService ? <Text style={styles.carteCadenas}>⏱</Text> : null}
+                  <View style={styles.carteTexte}>
+                    <Text style={styles.carteLabel} numberOfLines={2}>{m.label}</Text>
+                    {!m.autorise ? <Text style={styles.carteNonAttribue}>Non attribué</Text> : null}
+                  </View>
+                  {!m.autorise ? (
+                    <Text style={styles.carteCadenas}>🔒</Text>
+                  ) : doitPrendreService ? (
+                    <Text style={styles.carteCadenas}>⏱</Text>
+                  ) : null}
                 </TouchableOpacity>
               ))}
             </View>
@@ -418,4 +427,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   carteCadenas: { fontSize: 11, marginTop: 3 },
+  carteTexte: { alignItems: 'center' },
+  carteNonAttribue: { fontSize: 9, color: '#64748b', marginTop: 2, textAlign: 'center' },
 })
