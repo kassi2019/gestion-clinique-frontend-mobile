@@ -71,7 +71,7 @@ export default function PharmacieScreen({
   const [recu, setRecu] = useState<string | null>(null)
 
   // ── Stocks / Consommables (onglets web) ──
-  const [ongletPharma, setOngletPharma] = useState<'ordonnances' | 'credits' | 'stocks' | 'financier'>('ordonnances')
+  const [ongletPharma, setOngletPharma] = useState<'ordonnances' | 'credits' | 'stocks' | 'financier' | 'externes'>('ordonnances')
   // Crédit / cas social : motif demandé avant la remise des médicaments
   const [modaleReglement, setModaleReglement] = useState<{ type: 'CREDIT' | 'CAS_SOCIAL'; motif: string } | null>(null)
   // Crédits non réglés et cas sociaux de la pharmacie
@@ -754,6 +754,220 @@ export default function PharmacieScreen({
     }
   }
 
+  // ── Ordonnance externe (prescrite hors du centre) ──
+  const ORDO_EXT_VIDE = {
+    avecAssurance: false,
+    patient: null as any,
+    nouveau: false,
+    nouveauPatient: { nom: '', prenom: '', sexe: '', telephone: '' },
+    assuranceId: null as number | null,
+    formuleId: null as number | null,
+    numeroAssure: '',
+    clientNom: '',
+    prescripteur: '',
+    etablissement: '',
+    dateOrdonnance: '',
+    lignes: [] as { medicamentId: number; nom: string; stock: number; prixVente: number; consommable: boolean; quantite: string }[],
+    modePaiement: 'ESPECES',
+  }
+  const [ordoExtVisible, setOrdoExtVisible] = useState(false)
+  const [ordoExt, setOrdoExt] = useState(ORDO_EXT_VIDE)
+  const [ordoExtEnCours, setOrdoExtEnCours] = useState(false)
+  const [ordoExtRecherche, setOrdoExtRecherche] = useState('')
+  const [ordoExtPatients, setOrdoExtPatients] = useState<any[]>([])
+  const [ordoExtMedId, setOrdoExtMedId] = useState<number | null>(null)
+  const [ordoExtQte, setOrdoExtQte] = useState('1')
+  // Crédit / cas social : motif saisi dans la fenêtre avant validation
+  const [ordoExtReglement, setOrdoExtReglement] = useState<{ type: 'CREDIT' | 'CAS_SOCIAL'; motif: string } | null>(null)
+  const [catalogueExterne, setCatalogueExterne] = useState<any[]>([])
+  const [assurancesListe, setAssurancesListe] = useState<any[]>([])
+  const majOrdoExt = (champs: Partial<typeof ORDO_EXT_VIDE>) => setOrdoExt((o) => ({ ...o, ...champs }))
+
+  const optionsAssurances = assurancesListe
+    .filter((a) => a.statut === 'ACTIF' && a.formules?.some((f: any) => f.statut === 'ACTIF'))
+    .map((a) => ({ value: a.id, label: a.libelle }))
+  const formulesExterne =
+    assurancesListe.find((a) => a.id === ordoExt.assuranceId)?.formules?.filter((f: any) => f.statut === 'ACTIF') ?? []
+  const optionsMedicamentsExterne = catalogueExterne
+    .filter((m) => m.actif !== false && m.stock > 0)
+    .map((m) => ({ value: m.id, label: `${m.nom}${m.dosage ? ` (${m.dosage})` : ''} — stock ${m.stock}` }))
+
+  const tauxExterne = !ordoExt.avecAssurance
+    ? 0
+    : ordoExt.patient?.assurance
+      ? Number(ordoExt.patient.assurance.taux ?? 0)
+      : Number(formulesExterne.find((f: any) => f.id === ordoExt.formuleId)?.tauxPharmacie ?? 0)
+  const montantLigneExterne = (l: (typeof ORDO_EXT_VIDE.lignes)[number]) =>
+    l.consommable ? 0 : l.prixVente * (Number(l.quantite) || 0)
+  const totalExterne = ordoExt.lignes.reduce((s, l) => s + montantLigneExterne(l), 0)
+  const partAssuranceExterne = Math.round((totalExterne * tauxExterne) / 100)
+
+  async function ouvrirOrdoExterne() {
+    setOrdoExt(ORDO_EXT_VIDE)
+    setOrdoExtRecherche('')
+    setOrdoExtPatients([])
+    setOrdoExtMedId(null)
+    setOrdoExtQte('1')
+    setOrdoExtReglement(null)
+    setOrdoExtVisible(true)
+    // Catalogue complet (stock réel) + assurances paramétrées
+    const [catalogue, assurances] = await Promise.allSettled([
+      http.get('/pharmacie/stocks', { params: { cliniqueId } }),
+      http.get('/assurances', { params: { cliniqueId } }),
+    ])
+    setCatalogueExterne(catalogue.status === 'fulfilled' ? catalogue.value.data : [])
+    setAssurancesListe(assurances.status === 'fulfilled' ? assurances.value.data : [])
+  }
+
+  // Recherche rapide du patient assuré (nom, code ou téléphone)
+  useEffect(() => {
+    const q = ordoExtRecherche.trim()
+    if (!ordoExtVisible || q.length < 2) {
+      setOrdoExtPatients([])
+      return
+    }
+    const t = setTimeout(async () => {
+      try {
+        const { data } = await http.get('/pharmacie/ordonnances-externes/patients', { params: { cliniqueId, q } })
+        setOrdoExtPatients(data)
+      } catch {
+        setOrdoExtPatients([])
+      }
+    }, 300)
+    return () => clearTimeout(t)
+  }, [ordoExtRecherche, ordoExtVisible])
+
+  function nouveauPatientExterne() {
+    const saisie = ordoExtRecherche.trim().toUpperCase()
+    const [nom = '', ...prenoms] = saisie.split(/\s+/)
+    const telephone = /^\d+$/.test(nom) ? saisie : ''
+    majOrdoExt({
+      nouveau: true,
+      patient: null,
+      nouveauPatient: telephone
+        ? { nom: '', prenom: '', sexe: '', telephone }
+        : { nom, prenom: prenoms.join(' '), sexe: '', telephone: '' },
+    })
+  }
+
+  function ajouterLigneExterne() {
+    const m = catalogueExterne.find((x) => x.id === ordoExtMedId)
+    const qte = Math.floor(Number(ordoExtQte) || 0)
+    if (!m) return Alert.alert('Médicament', 'Choisissez un médicament.')
+    if (qte <= 0) return Alert.alert('Quantité', 'Saisissez une quantité.')
+    setOrdoExt((o) => {
+      const existante = o.lignes.find((l) => l.medicamentId === m.id)
+      const lignes = existante
+        ? o.lignes.map((l) => (l.medicamentId === m.id ? { ...l, quantite: String((Number(l.quantite) || 0) + qte) } : l))
+        : [
+            ...o.lignes,
+            {
+              medicamentId: m.id,
+              nom: `${m.nom}${m.dosage ? ` (${m.dosage})` : ''}`,
+              stock: m.stock,
+              prixVente: Number(m.prixVente ?? 0),
+              consommable: !!m.consommable,
+              quantite: String(qte),
+            },
+          ]
+      return { ...o, lignes }
+    })
+    setOrdoExtMedId(null)
+    setOrdoExtQte('1')
+  }
+
+  /** Contrôles avant envoi : message d'erreur, ou null si tout est bon. */
+  function erreurOrdoExterne() {
+    if (ordoExt.lignes.length === 0) return 'Ajoutez au moins un médicament.'
+    const trop = ordoExt.lignes.find((l) => !(Number(l.quantite) > 0) || Number(l.quantite) > l.stock)
+    if (trop) return `« ${trop.nom} » : quantité invalide (stock disponible : ${trop.stock}).`
+    if (ordoExt.avecAssurance) {
+      if (!ordoExt.patient && !ordoExt.nouveau) return 'Choisissez le patient ou créez-le.'
+      if (ordoExt.nouveau && (!ordoExt.nouveauPatient.nom.trim() || !ordoExt.nouveauPatient.prenom.trim())) {
+        return 'Le nom et les prénoms du patient sont obligatoires.'
+      }
+      if (!ordoExt.patient?.assurance && (!ordoExt.assuranceId || !ordoExt.formuleId)) {
+        return "Choisissez l'assurance et la formule du patient."
+      }
+    }
+    return null
+  }
+
+  function demanderReglementExterne(type: 'CREDIT' | 'CAS_SOCIAL') {
+    const erreur = erreurOrdoExterne()
+    if (erreur) return Alert.alert('Ordonnance externe', erreur)
+    setOrdoExtReglement({ type, motif: type === 'CAS_SOCIAL' ? 'Patient indigent' : 'Argent pas encore disponible' })
+  }
+
+  async function validerOrdoExterne(reglement?: { type: 'CREDIT' | 'CAS_SOCIAL'; motif: string }) {
+    const erreur = erreurOrdoExterne()
+    if (erreur) return Alert.alert('Ordonnance externe', erreur)
+    if (reglement && !reglement.motif.trim()) return Alert.alert('Motif', 'Indiquez le motif.')
+    const assure = ordoExt.avecAssurance
+    setOrdoExtEnCours(true)
+    try {
+      const { data } = await http.post('/pharmacie/ordonnances-externes', {
+        cliniqueId,
+        avecAssurance: assure,
+        patientId: assure ? ordoExt.patient?.id : undefined,
+        nouveauPatient: assure && !ordoExt.patient ? ordoExt.nouveauPatient : undefined,
+        assurance:
+          assure && !ordoExt.patient?.assurance
+            ? { assuranceId: ordoExt.assuranceId, formuleId: ordoExt.formuleId, numeroAssure: ordoExt.numeroAssure }
+            : undefined,
+        clientNom: assure ? undefined : ordoExt.clientNom,
+        prescripteur: ordoExt.prescripteur,
+        etablissement: ordoExt.etablissement,
+        dateOrdonnance: ordoExt.dateOrdonnance || undefined,
+        lignes: ordoExt.lignes.map((l) => ({ medicamentId: l.medicamentId, quantite: Number(l.quantite) })),
+        modePaiement: ordoExt.modePaiement,
+        type: reglement?.type,
+        motif: reglement?.motif.trim(),
+      })
+      setOrdoExtVisible(false)
+      setOrdoExtReglement(null)
+      Alert.alert('✅ Ordonnance externe enregistrée', `${data.ordonnanceExterne.numero} — reçu ${data.paiement.numeroRecu}`)
+      // Impression déjà faite par le backend (autoPrint) : aperçu seulement
+      setRecu(data.impression?.contenu ?? `Reçu ${data.paiement.numeroRecu} enregistré.`)
+      setOngletPharma('externes')
+      chargerRapportExternes()
+      chargerAlertes()
+      chargerCreditsPharma()
+    } catch (e: any) {
+      const msg = e.response?.data?.message
+      Alert.alert('Erreur', Array.isArray(msg) ? msg.join('\n') : msg ?? "Enregistrement de l'ordonnance externe impossible.")
+    } finally {
+      setOrdoExtEnCours(false)
+    }
+  }
+
+  // ── Rapport dédié des ordonnances externes ──
+  const RAPPORT_EXT_VIDE = {
+    lignes: [] as any[],
+    totaux: { nombre: 0, avecAssurance: 0, sansAssurance: 0, montantTotal: 0, montantAssurance: 0, montantEncaisse: 0, resteCredits: 0 },
+  }
+  const [rapportExternes, setRapportExternes] = useState(RAPPORT_EXT_VIDE)
+  const [externesDebut, setExternesDebut] = useState('')
+  const [externesFin, setExternesFin] = useState('')
+
+  async function chargerRapportExternes(debut = externesDebut, fin = externesFin) {
+    try {
+      const { data } = await http.get('/pharmacie/ordonnances-externes', {
+        params: { cliniqueId, debut: debut || undefined, fin: fin || undefined },
+      })
+      setRapportExternes(data)
+    } catch {
+      setRapportExternes(RAPPORT_EXT_VIDE)
+    }
+  }
+
+  function reglementExterne(o: any) {
+    if (o.statutPaiement === 'ANNULE') return 'Annulé'
+    if (o.type === 'CREDIT') return o.regleLe ? 'Crédit réglé' : 'Crédit'
+    if (o.type === 'CAS_SOCIAL') return 'Cas social'
+    return MODES.find((m) => m.value === o.modePaiement)?.label ?? o.modePaiement ?? '—'
+  }
+
   return (
     <Screen padded={false}>
       <View style={styles.bandeau}>
@@ -812,14 +1026,94 @@ export default function PharmacieScreen({
               setOngletPharma(k as typeof ongletPharma)
               if (k === 'financier') chargerFinancier()
               if (k === 'credits') chargerCreditsPharma()
+              if (k === 'externes') chargerRapportExternes()
             }}
             tabs={[
               { key: 'ordonnances', label: 'Ordonnances', count: dispensees.length },
               { key: 'credits', label: 'Crédits', count: creditsPharma.credits.length },
               { key: 'stocks', label: 'Stocks', count: alertes.stockBas.length },
               { key: 'financier', label: 'Financier' },
+              { key: 'externes', label: 'Externes' },
             ]}
           />
+
+          {ongletPharma === 'externes' ? (
+            <>
+              {recu ? <ApercuTexte contenu={recu} /> : null}
+              <View style={{ marginBottom: 10 }}>
+                <Btn title="＋ Saisir ordonnance externe" onPress={ouvrirOrdoExterne} />
+              </View>
+              <Card>
+                <SectionTitle>📄 Rapport des ordonnances externes</SectionTitle>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <View style={{ flex: 1 }}>
+                    <DateField
+                      label="Du"
+                      value={externesDebut}
+                      onChange={(v) => { setExternesDebut(v); chargerRapportExternes(v, externesFin) }}
+                      placeholder="Aujourd'hui"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <DateField
+                      label="Au"
+                      value={externesFin}
+                      onChange={(v) => { setExternesFin(v); chargerRapportExternes(externesDebut, v) }}
+                      placeholder="Aujourd'hui"
+                    />
+                  </View>
+                </View>
+                <InfoLigne
+                  label="🧾 Ordonnances servies"
+                  value={`${rapportExternes.totaux.nombre} (${rapportExternes.totaux.avecAssurance} avec / ${rapportExternes.totaux.sansAssurance} sans assurance)`}
+                />
+                <InfoLigne label="💊 Montant des médicaments" value={montant(rapportExternes.totaux.montantTotal)} />
+                <InfoLigne label="🛡️ Part assurances" value={montant(rapportExternes.totaux.montantAssurance)} />
+                <InfoLigne label="💵 Encaissé" value={montant(rapportExternes.totaux.montantEncaisse)} />
+                <InfoLigne label="🎫 Crédits non réglés" value={montant(rapportExternes.totaux.resteCredits)} />
+              </Card>
+              <Card>
+                {rapportExternes.lignes.length === 0 ? (
+                  <EtatVide texte="Aucune ordonnance externe sur la période." />
+                ) : (
+                  rapportExternes.lignes.map((o: any) => (
+                    <View key={o.id} style={[styles.item, styles.itemLigne]}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.itemTitre}>
+                          {o.numero} · {o.client}
+                        </Text>
+                        <Text style={styles.itemSous}>
+                          {new Date(o.createdAt).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          {o.prescripteur ? ` · ${o.prescripteur}` : ''}
+                          {o.etablissement ? ` (${o.etablissement})` : ''}
+                        </Text>
+                        <Text style={styles.itemSous}>
+                          {o.medicaments.map((m: any) => `${m.nom} × ${m.quantite}`).join(', ')}
+                        </Text>
+                        <Text style={styles.itemMontant}>
+                          {Number(o.montantTotal).toLocaleString('fr-FR')} FCFA
+                          {o.montantAssurance > 0
+                            ? ` · assurance ${o.assurance} (${o.tauxAssurance} %) : − ${Number(o.montantAssurance).toLocaleString('fr-FR')}`
+                            : ''}
+                        </Text>
+                        <View style={styles.badges}>
+                          <Badge label={o.avecAssurance ? 'Avec assurance' : 'Sans assurance'} tone={o.avecAssurance ? 'success' : 'muted'} />
+                          <Badge
+                            label={reglementExterne(o)}
+                            tone={o.statutPaiement === 'ANNULE' ? 'danger' : o.type === 'CREDIT' && !o.regleLe ? 'warning' : 'muted'}
+                          />
+                          {o.numeroRecu ? <Text style={styles.itemSous}>{o.numeroRecu}</Text> : null}
+                        </View>
+                      </View>
+                      {o.paiementId ? (
+                        <Btn title="🖨️ Reçu" small variant="outline" onPress={() => imprimerRecuPharmacie(o.paiementId)} />
+                      ) : null}
+                    </View>
+                  ))
+                )}
+              </Card>
+            </>
+          ) : null}
 
           {ongletPharma === 'credits' ? (
             <>
@@ -930,6 +1224,9 @@ export default function PharmacieScreen({
 
           {ongletPharma === 'ordonnances' ? (
             <>
+              <View style={{ marginBottom: 10 }}>
+                <Btn title="＋ Saisir ordonnance externe" variant="outline" onPress={ouvrirOrdoExterne} />
+              </View>
               {/* Une ligne par ordonnance : chacune se traite et se paie séparément */}
               {resultats.flatMap((r) =>
                 (r.ordonnances ?? []).map((o: any) => (
@@ -1307,6 +1604,277 @@ export default function PharmacieScreen({
         </ScrollView>
       )}
 
+      {/* Modale : saisie d'une ordonnance externe (prescrite hors du centre) */}
+      <Modale
+        visible={ordoExtVisible}
+        titre="📄 Ordonnance externe"
+        sousTitre="Ordonnance d'un autre établissement. Le stock diminue à la validation."
+        onFermer={() => !ordoExtEnCours && setOrdoExtVisible(false)}
+        actions={
+          ordoExtReglement ? (
+            <>
+              <Btn title="Retour" small variant="outline" onPress={() => setOrdoExtReglement(null)} />
+              <Btn title="Confirmer" small loading={ordoExtEnCours} onPress={() => validerOrdoExterne(ordoExtReglement)} />
+            </>
+          ) : (
+            <>
+              <Btn title="Annuler" small variant="outline" onPress={() => setOrdoExtVisible(false)} />
+              <Btn title="✅ Valider & encaisser" small loading={ordoExtEnCours} onPress={() => validerOrdoExterne()} />
+            </>
+          )
+        }
+      >
+        {/* 1. Avec ou sans assurance */}
+        <View style={styles.extChoix}>
+          {[
+            { assure: true, titre: '🛡️ Avec assurance', sous: 'Patient rattaché à son assurance' },
+            { assure: false, titre: '🛒 Sans assurance', sous: 'Comptant, aucun dossier patient' },
+          ].map((c) => (
+            <TouchableOpacity
+              key={c.titre}
+              style={[styles.extChoixBtn, ordoExt.avecAssurance === c.assure ? styles.extChoixActif : null]}
+              onPress={() => majOrdoExt({ avecAssurance: c.assure })}
+            >
+              <Text style={styles.extChoixTitre}>{c.titre}</Text>
+              <Text style={styles.extChoixSous}>{c.sous}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* 2a. Patient assuré */}
+        {ordoExt.avecAssurance ? (
+          <>
+            <SectionTitle>Patient</SectionTitle>
+            {ordoExt.patient ? (
+              <View style={styles.extPatient}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.itemTitre}>
+                    {ordoExt.patient.nom} {ordoExt.patient.prenom}
+                  </Text>
+                  <Text style={styles.itemSous}>
+                    code {ordoExt.patient.code}
+                    {ordoExt.patient.telephone ? ` · 📞 ${ordoExt.patient.telephone}` : ''}
+                  </Text>
+                </View>
+                <Btn title="Changer" small variant="outline" onPress={() => majOrdoExt({ patient: null })} />
+              </View>
+            ) : !ordoExt.nouveau ? (
+              <>
+                <Input
+                  label="Rechercher (nom et prénoms, code ou téléphone)"
+                  value={ordoExtRecherche}
+                  onChangeText={setOrdoExtRecherche}
+                />
+                {ordoExtPatients.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={styles.item}
+                    onPress={() => {
+                      majOrdoExt({ patient: p })
+                      setOrdoExtPatients([])
+                    }}
+                  >
+                    <Text style={styles.itemTitre}>
+                      {p.nom} {p.prenom}
+                    </Text>
+                    <Text style={styles.itemSous}>
+                      code {p.code}
+                      {p.telephone ? ` · 📞 ${p.telephone}` : ''}
+                    </Text>
+                    <View style={styles.badges}>
+                      {p.assurance ? (
+                        <Badge label={`🛡️ ${p.assurance.assurance} — ${p.assurance.taux} %`} tone="success" />
+                      ) : (
+                        <Badge label="Sans assurance active" tone="muted" />
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                ))}
+                {ordoExtRecherche.trim().length >= 2 && ordoExtPatients.length === 0 ? (
+                  <Text style={styles.itemSous}>Aucun patient trouvé.</Text>
+                ) : null}
+                <View style={{ marginTop: 8 }}>
+                  <Btn title="＋ Nouveau patient" small variant="outline" onPress={nouveauPatientExterne} />
+                </View>
+              </>
+            ) : (
+              <>
+                <Input
+                  label="Nom *"
+                  value={ordoExt.nouveauPatient.nom}
+                  onChangeText={(t) => majOrdoExt({ nouveauPatient: { ...ordoExt.nouveauPatient, nom: t } })}
+                />
+                <Input
+                  label="Prénoms *"
+                  value={ordoExt.nouveauPatient.prenom}
+                  onChangeText={(t) => majOrdoExt({ nouveauPatient: { ...ordoExt.nouveauPatient, prenom: t } })}
+                />
+                <Input label="Sexe">
+                  <ListeSelect
+                    value={ordoExt.nouveauPatient.sexe || null}
+                    options={[
+                      { value: 'M', label: 'Masculin' },
+                      { value: 'F', label: 'Féminin' },
+                    ]}
+                    onChange={(v) => majOrdoExt({ nouveauPatient: { ...ordoExt.nouveauPatient, sexe: String(v ?? '') } })}
+                  />
+                </Input>
+                <Input
+                  label="Téléphone"
+                  keyboardType="phone-pad"
+                  value={ordoExt.nouveauPatient.telephone}
+                  onChangeText={(t) => majOrdoExt({ nouveauPatient: { ...ordoExt.nouveauPatient, telephone: t } })}
+                />
+                <Btn title="← Rechercher un patient existant" small variant="outline" onPress={() => majOrdoExt({ nouveau: false })} />
+              </>
+            )}
+
+            {/* Assurance : celle du patient, sinon à rattacher */}
+            {ordoExt.patient?.assurance ? (
+              <View style={[styles.assurance, { marginTop: 10 }]}>
+                <Text style={styles.assuranceTexte}>
+                  🛡️ {ordoExt.patient.assurance.assurance} — {ordoExt.patient.assurance.formule}
+                  {ordoExt.patient.assurance.numeroAssure ? ` · N° ${ordoExt.patient.assurance.numeroAssure}` : ''} · médicaments
+                  couverts à {ordoExt.patient.assurance.taux} %
+                </Text>
+              </View>
+            ) : ordoExt.patient || ordoExt.nouveau ? (
+              <>
+                <SectionTitle>Assurance du patient</SectionTitle>
+                <Input label="Assurance *">
+                  <ListeSelect
+                    value={ordoExt.assuranceId}
+                    options={optionsAssurances}
+                    onChange={(v) => majOrdoExt({ assuranceId: v == null ? null : Number(v), formuleId: null })}
+                  />
+                </Input>
+                <Input label="Formule *">
+                  <ListeSelect
+                    value={ordoExt.formuleId}
+                    disabled={!ordoExt.assuranceId}
+                    options={formulesExterne.map((f: any) => ({
+                      value: f.id,
+                      label: `${f.libelle} (${f.tauxPharmacie ?? 0} % médicaments)`,
+                    }))}
+                    onChange={(v) => majOrdoExt({ formuleId: v == null ? null : Number(v) })}
+                  />
+                </Input>
+                <Input label="N° assuré" value={ordoExt.numeroAssure} onChangeText={(t) => majOrdoExt({ numeroAssure: t })} />
+              </>
+            ) : null}
+          </>
+        ) : (
+          <Input
+            label="Nom du client (facultatif, imprimé sur le reçu)"
+            placeholder="Client de passage"
+            value={ordoExt.clientNom}
+            onChangeText={(t) => majOrdoExt({ clientNom: t })}
+          />
+        )}
+
+        {/* 3. Origine de l'ordonnance */}
+        <SectionTitle>Ordonnance</SectionTitle>
+        <Input label="Médecin prescripteur" value={ordoExt.prescripteur} onChangeText={(t) => majOrdoExt({ prescripteur: t })} />
+        <Input label="Établissement" value={ordoExt.etablissement} onChangeText={(t) => majOrdoExt({ etablissement: t })} />
+        <DateField label="Date de l'ordonnance" value={ordoExt.dateOrdonnance} onChange={(v) => majOrdoExt({ dateOrdonnance: v })} placeholder="— —" />
+
+        {/* 4. Médicaments */}
+        <SectionTitle>Médicaments</SectionTitle>
+        <Input label="Médicament *">
+          <ListeSelect
+            value={ordoExtMedId}
+            options={optionsMedicamentsExterne}
+            placeholder="Choisir un médicament…"
+            onChange={(v) => setOrdoExtMedId(v == null ? null : Number(v))}
+          />
+        </Input>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Input label="Quantité *" keyboardType="number-pad" value={ordoExtQte} onChangeText={setOrdoExtQte} />
+          </View>
+          <View style={{ marginBottom: 12 }}>
+            <Btn title="＋ Ajouter" small onPress={ajouterLigneExterne} />
+          </View>
+        </View>
+        {ordoExt.lignes.length === 0 ? <Text style={styles.itemSous}>Aucun médicament ajouté.</Text> : null}
+        {ordoExt.lignes.map((l) => {
+          const trop = Number(l.quantite) > l.stock
+          return (
+            <View key={l.medicamentId} style={[styles.item, styles.itemLigne]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.medNom}>{l.nom}</Text>
+                <Text style={styles.medDetail}>
+                  Stock {l.stock} · {l.consommable ? 'Consommable (non facturé)' : `${l.prixVente.toLocaleString('fr-FR')} F`} ·{' '}
+                  {montantLigneExterne(l).toLocaleString('fr-FR')} F
+                </Text>
+                {trop ? <Text style={styles.qteMessage}>Stock disponible : {l.stock}</Text> : null}
+              </View>
+              <TextInput
+                style={[styles.qte, trop ? styles.qteErreur : null]}
+                keyboardType="number-pad"
+                value={l.quantite}
+                onChangeText={(t) =>
+                  setOrdoExt((o) => ({
+                    ...o,
+                    lignes: o.lignes.map((x) => (x.medicamentId === l.medicamentId ? { ...x, quantite: t.replace(/\D/g, '') } : x)),
+                  }))
+                }
+              />
+              <TouchableOpacity
+                onPress={() => setOrdoExt((o) => ({ ...o, lignes: o.lignes.filter((x) => x.medicamentId !== l.medicamentId) }))}
+              >
+                <Text style={styles.extRetirer}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          )
+        })}
+
+        {/* 5. Facture */}
+        <View style={[styles.recap, { marginTop: 10 }]}>
+          <Text style={styles.recapTotal}>Total : {totalExterne.toLocaleString('fr-FR')} FCFA</Text>
+          {partAssuranceExterne > 0 ? (
+            <>
+              <Text style={styles.recapAssurance}>
+                Part assurance ({tauxExterne} %) : − {partAssuranceExterne.toLocaleString('fr-FR')} FCFA
+              </Text>
+              <Text style={styles.recapTotal}>
+                Reste à payer : {(totalExterne - partAssuranceExterne).toLocaleString('fr-FR')} FCFA
+              </Text>
+            </>
+          ) : null}
+        </View>
+        {ordoExtReglement ? (
+          <View style={styles.assurance}>
+            <Text style={[styles.assuranceTexte, { fontWeight: '800', marginBottom: 6 }]}>
+              {ordoExtReglement.type === 'CAS_SOCIAL'
+                ? '🤝 Cas social : médicaments pris en charge par la clinique (non remboursable).'
+                : '🎫 Crédit : médicaments remis maintenant, le patient paiera sa part plus tard.'}
+            </Text>
+            <Input
+              label="Motif *"
+              value={ordoExtReglement.motif}
+              onChangeText={(t) => setOrdoExtReglement({ ...ordoExtReglement, motif: t })}
+            />
+          </View>
+        ) : (
+          <>
+            <Input label="Mode de paiement">
+              <ListeSelect value={ordoExt.modePaiement} options={MODES} onChange={(v) => majOrdoExt({ modePaiement: String(v) })} />
+            </Input>
+            {ordoExt.avecAssurance ? (
+              <View style={styles.reglementsSpeciaux}>
+                <View style={{ flex: 1 }}>
+                  <Btn title="🎫 Crédit" variant="outline" onPress={() => demanderReglementExterne('CREDIT')} disabled={ordoExtEnCours} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Btn title="🤝 Cas social" variant="outline" onPress={() => demanderReglementExterne('CAS_SOCIAL')} disabled={ordoExtEnCours} />
+                </View>
+              </View>
+            ) : null}
+          </>
+        )}
+      </Modale>
+
       {/* Modale : crédit / cas social (motif obligatoire) */}
       <Modale
         visible={modaleReglement !== null}
@@ -1635,6 +2203,31 @@ const styles = StyleSheet.create({
   assuranceTexte: { fontSize: 12.5, color: '#1e3a8a' },
   recapAssurance: { fontSize: 13, color: '#1d4ed8', marginTop: 2 },
   reglementsSpeciaux: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  // Ordonnance externe
+  extChoix: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  extChoixBtn: {
+    flex: 1,
+    padding: 10,
+    borderWidth: 2,
+    borderColor: colors.border,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+  },
+  extChoixActif: { borderColor: colors.primary, backgroundColor: '#eff6ff' },
+  extChoixTitre: { fontSize: 14, fontWeight: '800', color: colors.text },
+  extChoixSous: { fontSize: 11.5, color: colors.textMuted, marginTop: 2 },
+  extPatient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    marginBottom: 6,
+    backgroundColor: '#f0fdf4',
+    borderColor: '#bbf7d0',
+    borderWidth: 1,
+    borderRadius: 10,
+  },
+  extRetirer: { fontSize: 18, fontWeight: '800', color: colors.danger, paddingHorizontal: 6 },
   creditVide: { fontSize: 13, color: colors.textMuted, marginBottom: 6 },
   creditLigne: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, borderTopColor: colors.border, borderTopWidth: 1 },
   creditNom: { fontSize: 14, fontWeight: '800', color: colors.text },
