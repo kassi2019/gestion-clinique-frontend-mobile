@@ -231,6 +231,16 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
           </TouchableOpacity>
         </View>
 
+        {/* Tutoriels vidéo : mêmes vidéos que le menu 🎬 Tutoriels du web */}
+        <TouchableOpacity style={styles.tutoriels} onPress={() => navigation.navigate('Tutoriels')} activeOpacity={0.7}>
+          <Text style={styles.tutorielsIcone}>🎬</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.tutorielsTitre}>Tutoriels vidéo</Text>
+            <Text style={styles.tutorielsTexte}>Apprendre à utiliser vos modules</Text>
+          </View>
+          <Text style={styles.tutorielsFleche}>›</Text>
+        </TouchableOpacity>
+
         {aucunModuleAttribue ? (
           <Text style={styles.aucunModule}>Aucun module n'est attribué à votre rôle. Contactez l'administrateur.</Text>
         ) : null}
@@ -304,6 +314,21 @@ export default function HomeScreen({ navigation }: { navigation: Nav }) {
 }
 
 const styles = StyleSheet.create({
+  tutoriels: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.surface,
+    borderColor: colors.primary,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 14,
+  },
+  tutorielsIcone: { fontSize: 26 },
+  tutorielsTitre: { fontSize: 15, fontWeight: '800', color: colors.primaryDark },
+  tutorielsTexte: { fontSize: 12.5, color: colors.textMuted },
+  tutorielsFleche: { fontSize: 26, color: colors.primary, fontWeight: '700' },
   ecran: { flex: 1, backgroundColor: colors.bg },
   header: {
     paddingHorizontal: 20,

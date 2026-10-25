@@ -41,7 +41,8 @@
           "cameraPermission": "L'application utilise l'appareil photo pour photographier le résultat d'un examen.",
           "microphonePermission": false
         }
-      ]
+      ],
+      "expo-video"
     ]
   }
 }
