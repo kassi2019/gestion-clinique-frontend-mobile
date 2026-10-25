@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native'
 import { colors, radius } from '../theme'
+import Libelle from './Libelle'
 
 export type Option = { value: number | string; label: string }
 
@@ -99,7 +100,7 @@ export default function ListeCombo({
 
   return (
     <View>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
+      {label ? <Libelle label={label} style={styles.label} /> : null}
       <Pressable
         style={[styles.champ, !value && styles.vide]}
         onPress={ouvrir}

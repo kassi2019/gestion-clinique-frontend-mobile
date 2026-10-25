@@ -23,6 +23,7 @@ import {
   SectionTitle,
   EtatVide,
 } from '../components/ui'
+import { libelleStatutSoin, libelleVoie, toneStatutSoin } from '../utils/soins'
 
 type PassageRef = {
   id: number
@@ -52,6 +53,8 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
   const [realiserDate, setRealiserDate] = useState('')
   const [realiserObs, setRealiserObs] = useState('')
   const [saving, setSaving] = useState(false)
+  // Soin prescrit par le médecin : une confirmation par administration
+  const [adminCible, setAdminCible] = useState<any>(null)
 
   async function chargerFile() {
     try {
@@ -134,7 +137,13 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
     return 'Réalisé'
   }
 
+  function ouvrirAdministration(s: any) {
+    setAdminCible(s)
+    ouvrirRealisation(null)
+  }
+
   function ouvrirRealisation(ligne: any) {
+    if (ligne) setAdminCible(null)
     setRealiserCible(ligne)
     const d = new Date()
     const p = (n: number) => String(n).padStart(2, '0')
@@ -144,12 +153,23 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
   }
 
   async function confirmerRealisation() {
-    if (!passage || !realiserCible || !realiserDate) {
+    if (!passage || (!realiserCible && !adminCible) || !realiserDate) {
       Alert.alert('Soins', 'Indiquez la date et l’heure de réalisation.')
       return
     }
     setSaving(true)
     try {
+      if (adminCible) {
+        await http.post(`/soins/prescrits/${adminCible.id}/administrer`, {
+          date: new Date(realiserDate).toISOString(),
+          observations: realiserObs || undefined,
+        })
+        Alert.alert('✅ Administration confirmée', 'Date et agent tracés.')
+        setRealiserVisible(false)
+        const { data } = await http.get(`/soins/passages/${passage.id}`)
+        setDetail(data)
+        return
+      }
       await http.post(`/soins/passages/${passage.id}/realiser`, {
         passagePrestationId: realiserCible.id,
         date: new Date(realiserDate).toISOString(),
@@ -166,11 +186,25 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
     }
   }
 
+  /** Soins prescrits par le médecin : en cours d'abord. */
+  const prescrits = useMemo(
+    () =>
+      [...(detail?.prescrits ?? [])].sort(
+        (a: any, b: any) => (a.statut === 'EN_COURS' ? 0 : 1) - (b.statut === 'EN_COURS' ? 0 : 1) || a.id - b.id,
+      ),
+    [detail],
+  )
+
   const toutesRealisations = useMemo(
     () =>
-      (detail?.soins ?? []).flatMap((s: any) =>
-        (s.realisations ?? []).map((r: any) => ({ ...r, soinLibelle: s.libelle })),
-      ),
+      [
+        ...(detail?.soins ?? []).flatMap((s: any) =>
+          (s.realisations ?? []).map((r: any) => ({ ...r, soinLibelle: s.libelle })),
+        ),
+        ...(detail?.prescrits ?? []).flatMap((s: any) =>
+          (s.administrations ?? []).map((a: any) => ({ ...a, id: `A${a.id}`, soinLibelle: s.typeSoin })),
+        ),
+      ].sort((x: any, y: any) => new Date(y.date).getTime() - new Date(x.date).getTime()),
     [detail],
   )
 
@@ -218,7 +252,7 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
               {resultats.map((p) => (
                 <TouchableOpacity key={p.id} style={styles.item} onPress={() => choisirPassage(p)}>
                   <Text style={styles.itemTitre}>{p.patient.nom} {p.patient.prenom}</Text>
-                  <Text style={styles.itemSous}>{p.numeroOrdre} · {p.nbSoins ?? 0} soin(s) payé(s)</Text>
+                  <Text style={styles.itemSous}>{p.numeroOrdre} · {p.nbSoins ?? 0} soin(s) à faire</Text>
                 </TouchableOpacity>
               ))}
             </>
@@ -255,9 +289,60 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
         <Text style={styles.sousTitre}>{passage.numeroOrdre} · {passage.patient?.age ?? '—'} ans</Text>
       </View>
       <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+        {prescrits.length > 0 ? (
+          <Card>
+            <SectionTitle>Soins prescrits par le médecin</SectionTitle>
+            {prescrits.map((s: any) => (
+              <View key={s.id} style={[styles.soinCarte, s.statut !== 'EN_COURS' && styles.soinClos]}>
+                <View style={styles.soinTete}>
+                  <Text style={styles.soinType}>💉 {s.typeSoin}</Text>
+                  <Badge label={libelleStatutSoin(s.statut)} tone={toneStatutSoin(s.statut)} />
+                </View>
+                <Text style={styles.soinProgression}>
+                  {s.administrations.length}/{s.nbAdministrations} administration(s) · {s.foisParJour} fois/jour pendant {s.dureeJours} j
+                </Text>
+                {s.lignes.map((l: any) => (
+                  <View key={l.id} style={styles.soinMed}>
+                    <Text style={styles.medNom}>
+                      💊 {l.medicamentNom}
+                      {l.forme ? ` (${l.forme})` : ''}
+                    </Text>
+                    <Text style={styles.soinDose}>
+                      {l.dose} {l.unite ?? ''}
+                      {l.voie ? ` — ${libelleVoie(l.voie)}` : ''}
+                    </Text>
+                    {l.posologie ? <Text style={styles.itemSous}>Posologie : {l.posologie}</Text> : null}
+                    <Text style={styles.itemSous}>
+                      {(l.prescription?._count?.lignes ?? 0) > 0
+                        ? '✓ Délivré par la pharmacie'
+                        : `⏳ À retirer à la pharmacie : ${l.quantitePharmacie}`}
+                    </Text>
+                  </View>
+                ))}
+                {s.instructions ? <Text style={styles.soinInstructions}>📝 {s.instructions}</Text> : null}
+                <Text style={styles.itemSous}>
+                  Prescrit par {s.medecin?.personnel ? `${s.medecin.personnel.prenom} ${s.medecin.personnel.nom}` : s.medecin?.matricule ?? '—'} le{' '}
+                  {new Date(s.createdAt).toLocaleString('fr-FR')}
+                  {s.ordonnance ? ` · ordonnance ${s.ordonnance.numero}` : ''}
+                </Text>
+                {s.statut === 'EN_COURS' ? (
+                  <View style={{ marginTop: 8 }}>
+                    <Btn
+                      title={`✓ Confirmer l'administration (${s.administrations.length + 1}/${s.nbAdministrations})`}
+                      small
+                      onPress={() => ouvrirAdministration(s)}
+                    />
+                  </View>
+                ) : null}
+              </View>
+            ))}
+          </Card>
+        ) : null}
+
+        {lignesSoins.length > 0 || prescrits.length === 0 ? (
         <Card>
           <SectionTitle>Soins payés</SectionTitle>
-          {lignesSoins.length === 0 ? <EtatVide texte="Aucun soin payé pour ce passage." /> : null}
+          {lignesSoins.length === 0 ? <EtatVide texte="Aucun soin pour ce passage." /> : null}
           {lignesSoins.map((l: any) => (
             <View key={l.id} style={styles.ligneMed}>
               <View style={{ flex: 1 }}>
@@ -269,6 +354,7 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
             </View>
           ))}
         </Card>
+        ) : null}
 
         {toutesRealisations.length > 0 ? (
           <Card>
@@ -291,7 +377,12 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
 
       <Modale
         visible={realiserVisible}
-        titre={`💉 Réaliser — ${realiserCible?.libelle ?? ''}`}
+        titre={adminCible ? `💉 Administrer — ${adminCible.typeSoin}` : `💉 Réaliser — ${realiserCible?.libelle ?? ''}`}
+        sousTitre={
+          adminCible
+            ? `Administration ${adminCible.administrations.length + 1} sur ${adminCible.nbAdministrations}`
+            : undefined
+        }
         onFermer={() => setRealiserVisible(false)}
         actions={
           <>
@@ -300,6 +391,18 @@ export default function SoinsScreen({ navigation }: { navigation: { goBack: () =
           </>
         }
       >
+        {adminCible ? (
+          <View style={styles.soinRecap}>
+            <Text style={styles.medNom}>À administrer :</Text>
+            {adminCible.lignes.map((l: any) => (
+              <Text key={l.id} style={styles.soinDose}>
+                • {l.medicamentNom} — {l.dose} {l.unite ?? ''}
+                {l.voie ? ` (${libelleVoie(l.voie)})` : ''}
+              </Text>
+            ))}
+            {adminCible.instructions ? <Text style={styles.itemSous}>📝 {adminCible.instructions}</Text> : null}
+          </View>
+        ) : null}
         <Input label="Date et heure (AAAA-MM-JJTHH:MM)" value={realiserDate} onChangeText={setRealiserDate} />
         <Input label="Observations" value={realiserObs} onChangeText={setRealiserObs} multiline />
       </Modale>
@@ -353,4 +456,27 @@ const styles = StyleSheet.create({
   },
   medNom: { fontSize: 14, fontWeight: '700', color: colors.text, marginBottom: 4 },
   vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 14 },
+  soinCarte: {
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderLeftColor: colors.primary,
+    borderLeftWidth: 4,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+  },
+  soinClos: { borderLeftColor: colors.border, opacity: 0.75 },
+  soinTete: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  soinType: { fontSize: 16, fontWeight: '800', color: colors.text },
+  soinProgression: { fontSize: 13, fontWeight: '700', color: colors.primaryDark, marginVertical: 6 },
+  soinMed: { borderTopColor: colors.border, borderTopWidth: 1, paddingVertical: 6 },
+  soinDose: { fontSize: 15, fontWeight: '800', color: colors.text },
+  soinInstructions: {
+    backgroundColor: '#fffbeb',
+    borderRadius: 6,
+    padding: 8,
+    marginVertical: 6,
+    color: colors.text,
+  },
+  soinRecap: { backgroundColor: '#f1f5f9', borderRadius: 8, padding: 10, marginBottom: 10 },
 })

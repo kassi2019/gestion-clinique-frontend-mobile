@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { colors, radius } from '../theme'
+import Libelle from './Libelle'
 
 /**
  * Champ date avec calendrier (composant natif inclus dans Expo Go).
@@ -27,7 +28,7 @@ export default function DateField({
 
   return (
     <View>
-      {label ? <Text style={styles.label}>{label}</Text> : null}
+      {label ? <Libelle label={label} style={styles.label} /> : null}
       <Pressable style={styles.champ} onPress={afficher} accessibilityRole="button">
         <Text style={[styles.texte, !value && styles.vide]} numberOfLines={1}>
           {value || placeholder}

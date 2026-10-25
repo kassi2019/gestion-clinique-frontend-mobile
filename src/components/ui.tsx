@@ -16,6 +16,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors, radius } from '../theme'
+import Libelle from './Libelle'
 
 /** Comportement clavier : padding iOS, height Android (edge-to-edge). */
 const KAV_BEHAVIOR = Platform.OS === 'ios' ? ('padding' as const) : ('height' as const)
@@ -41,10 +42,7 @@ export function Input({
   return (
     <View style={styles.inputWrap}>
       {label ? (
-        <Text style={styles.inputLabel}>
-          {label}
-          {required ? ' *' : ''}
-        </Text>
+        <Libelle label={label} required={required} style={styles.inputLabel} />
       ) : null}
       {children ?? (
         <TextInput

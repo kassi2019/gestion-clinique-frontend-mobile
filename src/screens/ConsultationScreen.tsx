@@ -21,6 +21,14 @@ import ListeSelect from '../components/ListeSelect'
 import DateField from '../components/DateField'
 import ListeCombo from '../components/ListeCombo'
 import ReferenceFicheMobile from '../components/ReferenceFicheMobile'
+import {
+  UNITES_SOIN,
+  VOIES_SOIN,
+  libelleStatutSoin,
+  quantiteSuggeree,
+  texteLigneSoin,
+  toneStatutSoin,
+} from '../utils/soins'
 
 type PassageRef = {
   id: number
@@ -106,7 +114,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   const [detail, setDetail] = useState<any>(null)
   /** Patient de sexe masculin : la DDR et « Grossesse en cours » sont masquées. */
   const patientMasculin = (detail?.passage?.patient?.sexe ?? passage?.patient?.sexe) === 'M'
-  const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'examens' | 'reference' | 'certificat'>('fiche')
+  const [onglet, setOnglet] = useState<'fiche' | 'medicaments' | 'soins' | 'examens' | 'reference' | 'certificat'>('fiche')
 
   useEffect(() => {
     if (onglet === 'certificat') initCertificat()
@@ -134,10 +142,44 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
   const [ficheMedDuree, setFicheMedDuree] = useState('')
   const [ficheMedEnCours, setFicheMedEnCours] = useState(false)
 
+  /** « Posologie : … · Quantité à acheter : 2 plaquettes · Durée : … » */
+  function detailPrescription(p: any) {
+    const t = String(p.quantite ?? '').trim()
+    const pluriel = Number(t) > 1
+    const unite = p.medicament?.uniteVente === 'PLAQUE' ? (pluriel ? 'plaquettes' : 'plaquette') : pluriel ? 'boîtes' : 'boîte'
+    const qte = /^\d+$/.test(t) && p.medicament ? `${t} ${unite}` : t
+    return (
+      [
+        p.posologie && `Posologie : ${p.posologie}`,
+        qte && `Quantité à acheter : ${qte}`,
+        p.duree && `Durée : ${p.duree}`,
+      ]
+        .filter(Boolean)
+        .join(' · ') || '—'
+    )
+  }
+
+  /** Quantité à acheter : nombre entier ≥ 1 (boîtes ou plaquettes). */
+  const quantiteValide = (q: string) => /^\d+$/.test(q.trim()) && Number(q) >= 1
+  /** Unité de vente du médicament choisi (« plaquettes », « boîtes »). */
+  function uniteDuMedicament(id: number | null) {
+    const m = medicaments.find((x: any) => x.id === id && x.uniteVente)
+    if (!m) return 'boîtes ou plaquettes'
+    return m.uniteVente === 'PLAQUE' ? 'plaquettes' : 'boîtes'
+  }
+
   async function ajouterMedicamentFiche() {
     if (!consultation) return
     if (!ficheMedId && !ficheMedNom.trim()) {
       Alert.alert('Médicament', 'Choisissez un médicament du catalogue ou saisissez un nom.')
+      return
+    }
+    if (!ficheMedPoso.trim()) {
+      Alert.alert('Médicament', 'Indiquez la posologie.')
+      return
+    }
+    if (!quantiteValide(ficheMedQte)) {
+      Alert.alert('Médicament', 'Indiquez la quantité à acheter (nombre de boîtes ou de plaquettes).')
       return
     }
     setFicheMedEnCours(true)
@@ -146,7 +188,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         medicamentId: ficheMedId ?? undefined,
         nom: ficheMedNom.trim() || undefined,
         posologie: ficheMedPoso || undefined,
-        quantite: ficheMedQte || undefined,
+        quantite: ficheMedQte.trim(),
         duree: ficheMedDuree || undefined,
       })
       alimenterListe('POSOLOGIE', ficheMedPoso)
@@ -658,6 +700,14 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
       Alert.alert('Médicament', 'Choisissez un médicament du catalogue ou saisissez un nom libre.')
       return
     }
+    if (!medForm.posologie.trim()) {
+      Alert.alert('Médicament', 'Indiquez la posologie.')
+      return
+    }
+    if (!quantiteValide(medForm.quantite)) {
+      Alert.alert('Médicament', 'Indiquez la quantité à acheter (nombre de boîtes ou de plaquettes).')
+      return
+    }
     setMedEnCours(true)
     try {
       await http.post(`/consultations/${consultation.id}/medicaments`, {
@@ -665,7 +715,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
         ordonnanceId: ordonnanceActive?.statut === 'EN_ATTENTE' ? ordonnanceActive.id : undefined,
         nom: medForm.nom.trim() || undefined,
         posologie: medForm.posologie || undefined,
-        quantite: medForm.quantite || undefined,
+        quantite: medForm.quantite.trim(),
         duree: medForm.duree || undefined,
       })
       Alert.alert('✅ Médicament prescrit')
@@ -687,6 +737,152 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
     } catch {
       Alert.alert('Erreur', 'Retrait impossible.')
     }
+  }
+
+  // ── Onglet Soins : prescription → module Soins (sans caisse) ──
+  type LigneSoinForm = {
+    medicamentId: number | null
+    dose: string
+    unite: string
+    voie: string | null
+    posologie: string
+    quantitePharmacie: string
+    quantiteManuelle: boolean
+  }
+  const nouvelleLigneSoin = (total: number): LigneSoinForm => ({
+    medicamentId: null,
+    dose: '1',
+    unite: '',
+    voie: null,
+    posologie: '',
+    quantitePharmacie: String(total),
+    quantiteManuelle: false,
+  })
+  const [modaleSoin, setModaleSoin] = useState(false)
+  const [soinEnCours, setSoinEnCours] = useState(false)
+  const [typesSoins, setTypesSoins] = useState<{ value: number; label: string }[]>([])
+  const [consommables, setConsommables] = useState<{ value: number; label: string }[]>([])
+  const [soinForm, setSoinForm] = useState({
+    typeSoinId: null as number | null,
+    foisParJour: '1',
+    dureeJours: '1',
+    instructions: '',
+    lignes: [] as LigneSoinForm[],
+  })
+  const totalAdminSoin = Math.max(1, Number(soinForm.foisParJour) || 1) * Math.max(1, Number(soinForm.dureeJours) || 1)
+
+  /** Quantité à retirer : dose × nombre d'administrations, tant qu'elle n'est pas saisie à la main. */
+  function recalculerLignes(lignes: LigneSoinForm[], total: number) {
+    return lignes.map((l) =>
+      l.quantiteManuelle ? l : { ...l, quantitePharmacie: String(quantiteSuggeree(l.dose, total)) },
+    )
+  }
+  function majRythmeSoin(champ: { foisParJour?: string; dureeJours?: string }) {
+    const f = { ...soinForm, ...champ }
+    const total = Math.max(1, Number(f.foisParJour) || 1) * Math.max(1, Number(f.dureeJours) || 1)
+    setSoinForm({ ...f, lignes: recalculerLignes(f.lignes, total) })
+  }
+  function majLigneSoin(i: number, champ: Partial<LigneSoinForm>) {
+    const lignes = soinForm.lignes.map((l, j) => (j === i ? { ...l, ...champ } : l))
+    setSoinForm({ ...soinForm, lignes: champ.dose !== undefined ? recalculerLignes(lignes, totalAdminSoin) : lignes })
+  }
+
+  async function ouvrirSoin() {
+    setSoinForm({ typeSoinId: null, foisParJour: '1', dureeJours: '1', instructions: '', lignes: [nouvelleLigneSoin(1)] })
+    setModaleSoin(true)
+    try {
+      const [t, m] = await Promise.all([
+        http.get('/types-soins', { params: { cliniqueId } }),
+        http.get('/medicaments', { params: { perPage: 0, cliniqueId } }),
+      ])
+      setTypesSoins((t.data ?? []).map((x: any) => ({ value: x.id, label: x.libelle })))
+      // Seuls les médicaments consommables disponibles en stock sont proposés
+      const liste = Array.isArray(m.data) ? m.data : (m.data.data ?? [])
+      setConsommables(
+        liste
+          .filter((x: any) => x.actif && x.consommable && x.stock > 0)
+          .map((x: any) => ({
+            value: x.id,
+            label: `${x.nom}${x.dosage ? ' — ' + x.dosage : ''}${x.forme ? ' (' + x.forme + ')' : ''} · stock ${x.stock}`,
+          })),
+      )
+    } catch {
+      /* listes vides */
+    }
+  }
+
+  async function confirmerSoin() {
+    if (!consultation || !passage) return
+    if (!soinForm.typeSoinId) {
+      Alert.alert('Soin', 'Choisissez le type de soin.')
+      return
+    }
+    if (soinForm.lignes.some((l) => !l.medicamentId)) {
+      Alert.alert('Soin', "Choisissez le médicament de chaque ligne (ou retirez la ligne si le soin n'en demande pas).")
+      return
+    }
+    setSoinEnCours(true)
+    try {
+      await http.post(`/consultations/${consultation.id}/soins`, {
+        typeSoinId: soinForm.typeSoinId,
+        foisParJour: Number(soinForm.foisParJour) || 1,
+        dureeJours: Number(soinForm.dureeJours) || 1,
+        instructions: soinForm.instructions.trim() || undefined,
+        lignes: soinForm.lignes.map((l) => ({
+          medicamentId: l.medicamentId,
+          dose: l.dose.trim(),
+          unite: l.unite || undefined,
+          voie: l.voie || undefined,
+          posologie: l.posologie || undefined,
+          quantitePharmacie: Number(l.quantitePharmacie) || 1,
+        })),
+      })
+      soinForm.lignes.forEach((l) => alimenterListe('POSOLOGIE', l.posologie))
+      setModaleSoin(false)
+      await chargerDetail(passage.id)
+      Alert.alert('💉 Soin prescrit', 'Il est visible dans le module Soins.')
+    } catch (e: any) {
+      const m = e.response?.data?.message
+      Alert.alert('Erreur', Array.isArray(m) ? m.join('\n') : m ?? 'Prescription du soin impossible.')
+    } finally {
+      setSoinEnCours(false)
+    }
+  }
+
+  function retirerSoin(s: any) {
+    Alert.alert('Retirer le soin', `Retirer le soin « ${s.typeSoin} » ?`, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Retirer',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await http.delete(`/consultations/soins/${s.id}`)
+            await chargerDetail(passage!.id)
+          } catch (e: any) {
+            Alert.alert('Erreur', e.response?.data?.message ?? 'Retrait impossible.')
+          }
+        },
+      },
+    ])
+  }
+
+  function arreterSoin(s: any) {
+    Alert.alert('Arrêter le soin', `Arrêter « ${s.typeSoin} » ? Les administrations restantes ne seront pas faites.`, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Arrêter',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await http.post(`/consultations/soins/${s.id}/arreter`)
+            await chargerDetail(passage!.id)
+          } catch (e: any) {
+            Alert.alert('Erreur', e.response?.data?.message ?? 'Arrêt impossible.')
+          }
+        },
+      },
+    ])
   }
 
   async function imprimerOrdonnance() {
@@ -1216,7 +1412,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
 
           {/* Onglets */}
           <View style={styles.onglets}>
-            {(['fiche', 'medicaments', 'examens', 'reference', 'certificat'] as const).map((o) => (
+            {(['fiche', 'medicaments', 'soins', 'examens', 'reference', 'certificat'] as const).map((o) => (
               <TouchableOpacity key={o} style={[styles.onglet, onglet === o && styles.ongletActif]} onPress={() => setOnglet(o)}>
                 <Text
                   style={[styles.ongletTexte, onglet === o && styles.ongletTexteActif]}
@@ -1227,7 +1423,9 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     ? 'Fiche'
                     : o === 'medicaments'
                       ? 'Médicaments'
-                      : o === 'examens'
+                      : o === 'soins'
+                        ? 'Soins'
+                        : o === 'examens'
                         ? 'Examens'
                         : o === 'reference'
                           ? 'Référence'
@@ -1412,7 +1610,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                           {p.prixUnitaire != null ? ` — ${formatPrix(p.prixUnitaire)} F` : ''}
                         </Text>
                         <Text style={styles.medDetail}>
-                          {[p.posologie, p.quantite, p.duree].filter(Boolean).join(' · ') || '—'}
+                          {detailPrescription(p)}
                         </Text>
                       </View>
                       <Btn title="✕" small variant="danger" onPress={() => retirerMedicament(p.id)} />
@@ -1434,10 +1632,10 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                     onChangeText={setFicheMedNom}
                     placeholder="Nom du médicament"
                   />
-                  <ListeCombo label="Posologie" value={ficheMedPoso} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={setFicheMedPoso} />
+                  <ListeCombo label="Posologie *" value={ficheMedPoso} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={setFicheMedPoso} />
                   <View style={styles.ligne}>
                     <View style={styles.ligneItem}>
-                      <Input label="Quantité" value={ficheMedQte} onChangeText={setFicheMedQte} placeholder="Ex : 2 boîtes" />
+                      <Input label={`Quantité à acheter (${uniteDuMedicament(ficheMedId)}) *`} keyboardType="number-pad" value={ficheMedQte} onChangeText={setFicheMedQte} placeholder="Ex : 2" />
                     </View>
                     <View style={styles.ligneItem}>
                       <Input label="Durée" value={ficheMedDuree} onChangeText={setFicheMedDuree} placeholder="Ex : 5 j" />
@@ -1667,7 +1865,7 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                               {p.prixUnitaire != null ? ` — ${formatPrix(p.prixUnitaire)} F` : ''}
                             </Text>
                             <Text style={styles.medDetail}>
-                              {[p.posologie, p.quantite, p.duree].filter(Boolean).join(' · ') || '—'}
+                              {detailPrescription(p)}
                             </Text>
                           </View>
                           {ordonnanceActive?.statut !== 'TRAITEE' ? (
@@ -1694,6 +1892,51 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
                 </Card>
                 {ordoApercu ? <ApercuTexte contenu={ordoApercu} /> : null}
               </>
+            ) : onglet === 'soins' ? (
+              <Card>
+                <SectionTitle>Prescription des soins</SectionTitle>
+                {consultation ? (
+                  <>
+                    <Text style={styles.note}>
+                      Les soins prescrits apparaissent aussitôt dans le module Soins. Leurs médicaments partent sur une
+                      ordonnance « Soins » que l'infirmier retire à la pharmacie.
+                    </Text>
+                    {(consultation.soins ?? []).length === 0 ? <Text style={styles.note}>Aucun soin prescrit.</Text> : null}
+                    {(consultation.soins ?? []).map((s: any) => (
+                      <View key={s.id} style={styles.ligneMed}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.medNom}>
+                            💉 {s.typeSoin}
+                            {s.ordonnance ? ` · ${s.ordonnance.numero}` : ''}
+                          </Text>
+                          {s.lignes.map((l: any) => (
+                            <Text key={l.id} style={styles.medDetail}>
+                              💊 {texteLigneSoin(l)} · {l.quantitePharmacie} à retirer
+                            </Text>
+                          ))}
+                          <Text style={styles.medDetail}>
+                            {s.foisParJour} fois/jour · {s.dureeJours} j · {s.administrations.length}/{s.nbAdministrations} faite(s)
+                          </Text>
+                          {s.instructions ? <Text style={styles.medDetail}>📝 {s.instructions}</Text> : null}
+                          <View style={{ marginTop: 4, flexDirection: 'row' }}>
+                            <Badge label={libelleStatutSoin(s.statut)} tone={toneStatutSoin(s.statut)} />
+                          </View>
+                        </View>
+                        {s.administrations.length === 0 ? (
+                          <Btn title="✕" small variant="danger" onPress={() => retirerSoin(s)} />
+                        ) : s.statut === 'EN_COURS' ? (
+                          <Btn title="⏹ Arrêter" small variant="outline" onPress={() => arreterSoin(s)} />
+                        ) : null}
+                      </View>
+                    ))}
+                    <View style={{ marginTop: 10 }}>
+                      <Btn title="＋ Prescrire un soin" variant="outline" onPress={ouvrirSoin} />
+                    </View>
+                  </>
+                ) : (
+                  <EtatVide texte="Enregistrez d'abord la fiche de consultation." />
+                )}
+              </Card>
             ) : onglet === 'examens' ? (
               <Card>
                 <SectionTitle>Examens (laboratoire / imagerie)</SectionTitle>
@@ -1828,10 +2071,10 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
               />
             </Input>
             <Input label="Nom (saisie libre)" value={medForm.nom} onChangeText={(t) => setMedForm({ ...medForm, nom: t })} placeholder="Ex : Paracétamol 500 mg" />
-            <ListeCombo label="Posologie" value={medForm.posologie} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setMedForm({ ...medForm, posologie: v })} />
+            <ListeCombo label="Posologie *" value={medForm.posologie} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => setMedForm({ ...medForm, posologie: v })} />
             <View style={styles.ligne}>
               <View style={styles.ligneItem}>
-                <Input label="Quantité" value={medForm.quantite} onChangeText={(t) => setMedForm({ ...medForm, quantite: t })} placeholder="12" />
+                <Input label={`Quantité à acheter (${uniteDuMedicament(medForm.medicamentId)}) *`} keyboardType="number-pad" value={medForm.quantite} onChangeText={(t) => setMedForm({ ...medForm, quantite: t })} placeholder="Ex : 2" />
               </View>
               <View style={styles.ligneItem}>
                 <Input label="Durée" value={medForm.duree} onChangeText={(t) => setMedForm({ ...medForm, duree: t })} placeholder="4 jours" />
@@ -1844,6 +2087,100 @@ export default function ConsultationScreen({ navigation }: { navigation: { goBac
           </View>
         </View>
       ) : null}
+
+      {/* Modale : prescription d'un soin */}
+      <Modale
+        visible={modaleSoin}
+        titre="💉 Prescrire un soin"
+        sousTitre={`Soit ${totalAdminSoin} administration(s) à confirmer par l'infirmier`}
+        onFermer={() => setModaleSoin(false)}
+        actions={
+          <>
+            <Btn title="Annuler" variant="outline" onPress={() => setModaleSoin(false)} />
+            <Btn title="Prescrire" onPress={confirmerSoin} loading={soinEnCours} />
+          </>
+        }
+      >
+        <Input label="Type de soin *">
+          <ListeSelect
+            value={soinForm.typeSoinId}
+            options={typesSoins}
+            placeholder="— Choisir le type de soin —"
+            onChange={(v) => setSoinForm({ ...soinForm, typeSoinId: v as number })}
+          />
+        </Input>
+        <View style={styles.ligne}>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Fois par jour *"
+              keyboardType="number-pad"
+              value={soinForm.foisParJour}
+              onChangeText={(t) => majRythmeSoin({ foisParJour: t })}
+            />
+          </View>
+          <View style={styles.ligneItem}>
+            <Input
+              label="Durée (jours) *"
+              keyboardType="number-pad"
+              value={soinForm.dureeJours}
+              onChangeText={(t) => majRythmeSoin({ dureeJours: t })}
+            />
+          </View>
+        </View>
+
+        <SectionTitle>Médicaments à administrer</SectionTitle>
+        {consommables.length === 0 ? <Text style={styles.note}>Aucun médicament consommable disponible en stock.</Text> : null}
+        {soinForm.lignes.map((l, i) => (
+          <View key={i} style={styles.soinLigne}>
+            <Input label="Médicament consommable *">
+              <ListeSelect
+                value={l.medicamentId}
+                options={consommables}
+                placeholder="— Choisir —"
+                onChange={(v) => majLigneSoin(i, { medicamentId: v as number })}
+              />
+            </Input>
+            <View style={styles.ligne}>
+              <View style={styles.ligneItem}>
+                <Input label="Quantité par prise *" value={l.dose} placeholder="1, 1/2" onChangeText={(t) => majLigneSoin(i, { dose: t })} />
+              </View>
+              <View style={styles.ligneItem}>
+                <ListeCombo label="Unité" value={l.unite} options={UNITES_SOIN} placeholder="AMPOULE" onChange={(v) => majLigneSoin(i, { unite: v })} />
+              </View>
+            </View>
+            <Input label="Voie">
+              <ListeSelect
+                value={l.voie}
+                options={VOIES_SOIN}
+                placeholder="— Choisir la voie —"
+                onChange={(v) => majLigneSoin(i, { voie: v as string })}
+              />
+            </Input>
+            <ListeCombo label="Posologie" value={l.posologie} options={listes.posologie ?? []} placeholder="— Choisir ou ajouter —" onChange={(v) => majLigneSoin(i, { posologie: v })} />
+            <View style={styles.ligne}>
+              <View style={styles.ligneItem}>
+                <Input
+                  label="À retirer à la pharmacie *"
+                  keyboardType="number-pad"
+                  value={l.quantitePharmacie}
+                  onChangeText={(t) => majLigneSoin(i, { quantitePharmacie: t, quantiteManuelle: true })}
+                />
+              </View>
+              <View style={[styles.ligneItem, { justifyContent: 'flex-end', paddingBottom: 12 }]}>
+                <Btn title="✕ Retirer" small variant="danger" onPress={() => setSoinForm({ ...soinForm, lignes: soinForm.lignes.filter((_, j) => j !== i) })} />
+              </View>
+            </View>
+          </View>
+        ))}
+        <Btn title="＋ Ajouter un médicament" small variant="outline" onPress={() => setSoinForm({ ...soinForm, lignes: [...soinForm.lignes, nouvelleLigneSoin(totalAdminSoin)] })} />
+        <Input
+          label="Instructions complémentaires"
+          value={soinForm.instructions}
+          onChangeText={(t) => setSoinForm({ ...soinForm, instructions: t })}
+          placeholder="Ex : injecter lentement"
+          multiline
+        />
+      </Modale>
 
       {/* Modale : détail d'une consultation passée (ce que le patient a reçu) */}
       <Modale
@@ -2238,6 +2575,13 @@ const styles = StyleSheet.create({
   ficheTexte: { fontSize: 13, lineHeight: 19, color: colors.text, marginTop: 6 },
   ficheValeur: { fontWeight: '800' },
   ligne: { flexDirection: 'row', gap: 10 },
+  soinLigne: {
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+    marginBottom: 10,
+  },
   ligneItem: { flex: 1 },
   ligneDispo: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
   vide: { textAlign: 'center', color: colors.textMuted, paddingVertical: 16 },

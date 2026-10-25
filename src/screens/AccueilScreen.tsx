@@ -43,6 +43,7 @@ type PassageJour = {
     prenom: string
     age?: string
     dateNaissance?: string
+    typePieceIdentite?: string
     numeroCni?: string
     numeroCmu?: string
     sexe?: string
@@ -68,6 +69,15 @@ type PassageJour = {
   perimetreBrachial?: string
   perimetreCranien?: string
 }
+
+// Types de pièce d'identité (valeur backend → libellé affiché)
+const TYPES_PIECE_IDENTITE: { value: string; label: string }[] = [
+  { value: 'CNI', label: "Carte nationale d'identité (CNI)" },
+  { value: 'PASSEPORT', label: 'Passeport' },
+  { value: 'CARTE_CONSULAIRE', label: 'Carte consulaire' },
+  { value: 'ATTESTATION', label: 'Attestation' },
+  { value: 'AUTRE', label: "Autre pièce d'identité" },
+]
 
 export default function AccueilScreen({ navigation }: { navigation: { goBack: () => void } }) {
   const { user, canAccess } = useAuth()
@@ -103,8 +113,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
   const [prenom, setPrenom] = useState('')
   const [age, setAge] = useState('')
   const [dateNaissance, setDateNaissance] = useState('')
+  const [typePiece, setTypePiece] = useState('CNI')
   const [cni, setCni] = useState('')
-  const [cmu, setCmu] = useState('')
 
   // ── Calcul automatique âge ⇄ date de naissance ──
   function ageDepuisNaissance(d: string): string {
@@ -139,7 +149,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
     if (a) setAge(a)
   }
 
-  // ── N° CNI / N° CMU uniques : si le patient existe, il s'affiche automatiquement ──
+  // ── N° de pièce d'identité unique : si le patient existe, il s'affiche automatiquement ──
   let identifiantTimer: ReturnType<typeof setTimeout> | null = null
 
   function verifierIdentifiant(v: string) {
@@ -151,9 +161,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         const { data } = await http.get('/accueil/patients', {
           params: { search: t, cliniqueId },
         })
-        const exact = (data ?? []).find(
-          (p: any) => p.numeroCni === t || p.numeroCmu === t,
-        )
+        const exact = (data ?? []).find((p: any) => p.numeroCni === t)
         if (exact) {
           utiliserPatientExistant(exact)
         }
@@ -165,11 +173,6 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
 
   function changerCni(v: string) {
     setCni(v)
-    verifierIdentifiant(v)
-  }
-
-  function changerCmu(v: string) {
-    setCmu(v)
     verifierIdentifiant(v)
   }
   const [sexe, setSexe] = useState('')
@@ -224,8 +227,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
     prenom: '',
     age: '',
     dateNaissance: '',
+    typePieceIdentite: 'CNI',
     numeroCni: '',
-    numeroCmu: '',
     sexe: '',
     telephone: '',
     ville: '',
@@ -563,8 +566,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           prenom: prenom.trim(),
           age: age || undefined,
           dateNaissance: dateNaissance || undefined,
+          typePieceIdentite: cni ? typePiece : undefined,
           numeroCni: cni || undefined,
-          numeroCmu: cmu || undefined,
           sexe: sexe || undefined,
           telephone: telephone || undefined,
           ville: ville || undefined,
@@ -594,7 +597,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       setAssureNouveau(false)
       viderAssurance()
       // Réinitialiser
-      setNom(''); setPrenom(''); setAge(''); setDateNaissance(''); setCni(''); setCmu(''); setSexe(''); setTelephone('')
+      setNom(''); setPrenom(''); setAge(''); setDateNaissance(''); setTypePiece('CNI'); setCni(''); setSexe(''); setTelephone('')
       setVille(''); setResidenceActuelle(''); setQuartier(''); setProfession(''); setMotif('')
       setDoublons([])
       setPatientChoisi(null); setRecherchePatient(''); setResultatsPatients([])
@@ -706,8 +709,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
       dateNaissance: p.patient?.dateNaissance
         ? String(p.patient.dateNaissance).slice(0, 10)
         : '',
+      typePieceIdentite: p.patient?.typePieceIdentite ?? 'CNI',
       numeroCni: p.patient?.numeroCni ?? '',
-      numeroCmu: p.patient?.numeroCmu ?? '',
       sexe: p.patient?.sexe ?? '',
       telephone: p.patient?.telephone ?? '',
       ville: p.patient?.residenceHabituelle ?? p.patient?.ville ?? '',
@@ -738,8 +741,8 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
           prenom: modifForm.prenom.trim() || undefined,
           age: modifForm.age || undefined,
           dateNaissance: modifForm.dateNaissance || undefined,
+          typePieceIdentite: modifForm.numeroCni ? modifForm.typePieceIdentite : undefined,
           numeroCni: modifForm.numeroCni || undefined,
-          numeroCmu: modifForm.numeroCmu || undefined,
           sexe: modifForm.sexe || undefined,
           telephone: modifForm.telephone || undefined,
           ville: modifForm.ville || undefined,
@@ -992,7 +995,7 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
             {modePatient === "existant" ? (
               <>
                 <Input
-                  label="Rechercher (nom, code, téléphone, CNI, CMU, date de naissance)"
+                  label="Rechercher (nom, code, téléphone, N° pièce, date de naissance)"
                   value={recherchePatient}
                   onChangeText={setRecherchePatient}
                   placeholder="Ex : TRAORE, 0700000000, 12/05/1990"
@@ -1026,14 +1029,15 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
               </>
             ) : (
               <>
-                <View style={styles.ligne}>
-                  <View style={styles.ligneItem}>
-                    <Input label="N° CNI" value={cni} onChangeText={changerCni} />
-                  </View>
-                  <View style={styles.ligneItem}>
-                    <Input label="N° CMU" value={cmu} onChangeText={changerCmu} />
-                  </View>
-                </View>
+                <Input label="Type de pièce d'identité">
+                  <ListeSelect
+                    value={typePiece}
+                    options={TYPES_PIECE_IDENTITE}
+                    placeholder="— Choisir la pièce —"
+                    onChange={(v) => setTypePiece(String(v ?? 'CNI'))}
+                  />
+                </Input>
+                <Input label="N° de la pièce d'identité" value={cni} onChangeText={changerCni} />
                 <Input label="Nom *" value={nom} onChangeText={setNom} />
                 {doublons.length > 0 ? (
                   <View style={styles.doublons}>
@@ -1514,22 +1518,19 @@ export default function AccueilScreen({ navigation }: { navigation: { goBack: ()
         }
       >
         <SectionTitle>Patient</SectionTitle>
-        <View style={styles.ligne}>
-          <View style={styles.ligneItem}>
-            <Input
-              label="N° CNI"
-              value={modifForm.numeroCni}
-              onChangeText={(t) => setModifForm({ ...modifForm, numeroCni: t })}
-            />
-          </View>
-          <View style={styles.ligneItem}>
-            <Input
-              label="N° CMU"
-              value={modifForm.numeroCmu}
-              onChangeText={(t) => setModifForm({ ...modifForm, numeroCmu: t })}
-            />
-          </View>
-        </View>
+        <Input label="Type de pièce d'identité">
+          <ListeSelect
+            value={modifForm.typePieceIdentite}
+            options={TYPES_PIECE_IDENTITE}
+            placeholder="— Choisir la pièce —"
+            onChange={(v) => setModifForm({ ...modifForm, typePieceIdentite: String(v ?? 'CNI') })}
+          />
+        </Input>
+        <Input
+          label="N° de la pièce d'identité"
+          value={modifForm.numeroCni}
+          onChangeText={(t) => setModifForm({ ...modifForm, numeroCni: t })}
+        />
         <View style={styles.ligne}>
           <View style={styles.ligneItem}>
             <Input

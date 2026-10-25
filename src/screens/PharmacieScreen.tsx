@@ -39,6 +39,18 @@ type PassageRef = {
   ordonnances?: any[]
 }
 
+/** Quantité demandée par le médecin : « 2 plaquettes » (ancienne saisie libre affichée telle quelle). */
+function quantiteDemandee(p: any) {
+  const t = String(p?.quantite ?? '').trim()
+  if (!t) return '—'
+  if (/^\d+$/.test(t) && p.medicament) {
+    const pluriel = Number(t) > 1
+    const unite = p.medicament.uniteVente === 'PLAQUE' ? (pluriel ? 'plaquettes' : 'plaquette') : pluriel ? 'boîtes' : 'boîte'
+    return `${t} ${unite}`
+  }
+  return t
+}
+
 export default function PharmacieScreen({
   navigation,
 }: {
@@ -657,6 +669,16 @@ export default function PharmacieScreen({
 
   /** Lignes à délivrer (null si aucune quantité saisie). */
   function lignesADelivrer() {
+    const trop = (ordonnance?.prescriptions ?? []).find(
+      (p: any) => p.quantiteMax != null && Number(quantites[p.id] || 0) > p.quantiteMax,
+    )
+    if (trop) {
+      Alert.alert(
+        'Quantité trop élevée',
+        `« ${trop.medicamentNom} » : la quantité délivrée (${quantites[trop.id]}) ne peut pas dépasser la quantité demandée par le médecin (${trop.quantiteMax}).`,
+      )
+      return null
+    }
     const lignes = (ordonnance?.prescriptions ?? [])
       .filter((p: any) => Number(quantites[p.id]) > 0)
       .map((p: any) => ({ prescriptionId: p.id, quantiteDelivree: Number(quantites[p.id]) }))
@@ -916,7 +938,8 @@ export default function PharmacieScreen({
                       {r.patient.nom} {r.patient.prenom}
                     </Text>
                     <Text style={styles.itemSous}>
-                      {r.numeroOrdre} · {o.numeroOrdonnance} · {o.medicaments?.length ?? 0} médicament(s) ·{' '}
+                      {r.numeroOrdre} · {o.numeroOrdonnance}
+                      {o.ordonnanceType === 'SOINS' ? ' 💉 Soins (à remettre à l’infirmier)' : ''} · {o.medicaments?.length ?? 0} médicament(s) ·{' '}
                       {o.ordonnanceStatut === 'TRAITEE' ? 'traitée' : 'en attente'}
                     </Text>
                   </TouchableOpacity>
@@ -1165,8 +1188,11 @@ export default function PharmacieScreen({
                     {p.medicamentNom}
                     {p.forme ? ` (${p.forme})` : ''}
                   </Text>
+                  <Text style={styles.qteDemandee}>
+                    Quantité demandée par le médecin : {quantiteDemandee(p)}
+                  </Text>
                   <Text style={styles.medDetail}>
-                    {[p.posologie, p.quantite, p.duree].filter(Boolean).join(' · ') || '—'}
+                    {[p.posologie, p.duree].filter(Boolean).join(' · ') || '—'}
                   </Text>
                   {p.medicament ? (
                     <Text style={styles.medDetail}>
@@ -1179,13 +1205,23 @@ export default function PharmacieScreen({
                     <Badge label="Hors catalogue" tone="warning" />
                   )}
                 </View>
-                <TextInput
-                  style={styles.qte}
-                  keyboardType="numeric"
-                  value={quantites[p.id]}
-                  onChangeText={(t) => setQuantites({ ...quantites, [p.id]: t })}
-                  placeholder="0"
-                />
+                <View style={{ alignItems: 'flex-end' }}>
+                  <TextInput
+                    style={[
+                      styles.qte,
+                      p.quantiteMax != null && Number(quantites[p.id] || 0) > p.quantiteMax && styles.qteErreur,
+                    ]}
+                    keyboardType="numeric"
+                    value={quantites[p.id]}
+                    onChangeText={(t) => setQuantites({ ...quantites, [p.id]: t })}
+                    placeholder="0"
+                  />
+                  {p.quantiteMax != null && Number(quantites[p.id] || 0) > p.quantiteMax ? (
+                    <Text style={styles.qteMessage}>Max : {p.quantiteMax}</Text>
+                  ) : p.dejaDelivree > 0 ? (
+                    <Text style={styles.medDetail}>Déjà délivré : {p.dejaDelivree}</Text>
+                  ) : null}
+                </View>
               </View>
             ))}
           </Card>
@@ -1592,6 +1628,9 @@ export default function PharmacieScreen({
 }
 
 const styles = StyleSheet.create({
+  qteErreur: { borderColor: colors.danger, borderWidth: 2 },
+  qteMessage: { color: colors.danger, fontWeight: '700', fontSize: 12, marginTop: 2 },
+  qteDemandee: { fontSize: 13.5, fontWeight: '800', color: colors.text, marginTop: 2 },
   assurance: { padding: 10, marginBottom: 10, backgroundColor: '#eff6ff', borderColor: '#bfdbfe', borderWidth: 1, borderRadius: 10 },
   assuranceTexte: { fontSize: 12.5, color: '#1e3a8a' },
   recapAssurance: { fontSize: 13, color: '#1d4ed8', marginTop: 2 },
