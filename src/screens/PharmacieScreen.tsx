@@ -766,7 +766,7 @@ export default function PharmacieScreen({
     clientNom: '',
     prescripteur: '',
     etablissement: '',
-    dateOrdonnance: '',
+    dateOrdonnance: aujourdhuiIso(), // date de prescription : du jour par défaut, modifiable
     lignes: [] as { medicamentId: number; nom: string; stock: number; prixVente: number; consommable: boolean; quantite: string }[],
     modePaiement: 'ESPECES',
   }
@@ -1776,7 +1776,8 @@ export default function PharmacieScreen({
         <SectionTitle>Ordonnance</SectionTitle>
         <Input label="Médecin prescripteur" value={ordoExt.prescripteur} onChangeText={(t) => majOrdoExt({ prescripteur: t })} />
         <Input label="Établissement" value={ordoExt.etablissement} onChangeText={(t) => majOrdoExt({ etablissement: t })} />
-        <DateField label="Date de l'ordonnance" value={ordoExt.dateOrdonnance} onChange={(v) => majOrdoExt({ dateOrdonnance: v })} placeholder="— —" />
+        {/* Date écrite sur l'ordonnance : date du jour par défaut, modifiable */}
+        <DateField label="Date de l'ordonnance" value={ordoExt.dateOrdonnance} onChange={(v) => majOrdoExt({ dateOrdonnance: v })} />
 
         {/* 4. Médicaments */}
         <SectionTitle>Médicaments</SectionTitle>
